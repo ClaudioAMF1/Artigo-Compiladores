@@ -1,0 +1,171 @@
+% !TEX program = pdflatex
+% Artigo: Uso de Modelos de Linguagem para Otimizacao de Codigo Python
+% Formato: IEEE Conference Template (IEEEtran)
+% Compilacao no Overleaf: selecionar compilador pdfLaTeX
+
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[brazil]{babel}
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{url}
+\usepackage{listings}
+\usepackage{hyperref}
+
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  breaklines=true,
+  frame=single,
+  numbers=left,
+  numberstyle=\tiny,
+  language=Python,
+  showstringspaces=false,
+  tabsize=2
+}
+
+\def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
+    T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
+
+\begin{document}
+
+\title{Uso de Modelos de Linguagem para Otimização de Código Python: Limites e Possibilidades em Linguagens Dinâmicas}
+
+\author{
+\IEEEauthorblockN{Nome do(a) Autor(a)}
+\IEEEauthorblockA{\textit{Curso de Ciência da Computação} \\
+\textit{Universidade / Instituto}\\
+Cidade, Brasil \\
+email@dominio.edu.br}
+}
+
+\maketitle
+
+\begin{abstract}
+Modelos de Linguagem de Grande Escala (\textit{Large Language Models} --- LLMs) têm apresentado desempenho expressivo em tarefas de engenharia de software, incluindo transformação e otimização de código. Em linguagens dinâmicas como Python, otimizações clássicas de compilador são historicamente limitadas pelo dinamismo da tipagem, \textit{late binding} e reflexão, fatores que reduzem o espaço de decisão de um compilador estático. Este artigo investiga os limites e possibilidades do uso de LLMs como componente auxiliar ao processo de compilação de código Python, propondo uma arquitetura baseada em um \textit{foundation model} (GPT-4o) combinado com \textit{Retrieval-Augmented Generation} (RAG) sobre o dataset público Project CodeNet (benchmark Python800) e o \textit{Performance Improving Edits} (PIE). A arquitetura proposta contempla análise estática via AST, construção de contexto, inferência pelo LLM, validação semântica por testes unitários e mensuração de desempenho. Discutem-se os limites intrínsecos do paradigma dinâmico do Python e as possibilidades abertas pelos LLMs para contornar tais limites por meio de transformações de alto nível que tradicionalmente não são tratadas por compiladores convencionais.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Compiladores, Otimização de Código, Python, Linguagens Dinâmicas, Modelos de Linguagem, LLM, GPT-4o, Project CodeNet, PIE.
+\end{IEEEkeywords}
+
+\section{Introdução}
+
+A crescente adoção de Python em domínios como ciência de dados, aprendizado de máquina e automação reforçou a importância de seu desempenho em tempo de execução. Apesar disso, o interpretador de referência CPython oferece otimizações relativamente modestas se comparado a cadeias de compilação maduras como LLVM ou GCC \cite{cpython_dumb}. Essa lacuna decorre, em grande parte, de características da própria linguagem: tipagem dinâmica, \textit{late binding}, \textit{monkey patching} e capacidade de introspecção e modificação do programa em tempo de execução \cite{yashwanth_dynamic}.
+
+Simultaneamente, Modelos de Linguagem de Grande Escala (LLMs) baseados em \textit{Transformers} vêm sendo empregados com sucesso em tarefas de transformação e otimização de código \cite{cummins2023llm,cummins2024metacompiler,survey2025}. Recentemente, trabalhos específicos têm demonstrado que LLMs podem sugerir transformações de código que resultam em ganhos expressivos de tempo de execução em Python \cite{shypula2023pie,fasterpy2025}. A hipótese central deste trabalho é que LLMs podem atuar como um componente híbrido, complementar às fases de otimização de um compilador Python, operando no nível do código-fonte e no nível do \textit{bytecode}, para reduzir os gargalos impostos pelo dinamismo da linguagem.
+
+Este artigo se propõe a responder à seguinte pergunta de pesquisa: \textit{quais são os limites e as possibilidades do uso de LLMs para otimizar código Python no contexto de uma cadeia de compilação, considerando as restrições impostas por uma linguagem dinâmica?}
+
+As contribuições deste trabalho são: (i) um levantamento crítico do estado da arte sobre LLMs aplicados a otimização de código, com foco em Python; (ii) uma análise sistemática dos limites impostos pelo dinamismo da linguagem às otimizações estáticas; e (iii) uma proposta de arquitetura baseada em LLM integrada a um \textit{dataset} público estático de Python (Project CodeNet e PIE), com pipeline de extração de \textit{features}, construção de contexto por RAG, inferência por \textit{foundation model} e validação semântica.
+
+O restante do artigo está organizado da seguinte forma. A Seção~\ref{sec:fundamentacao} apresenta a fundamentação teórica sobre compilação de linguagens dinâmicas e LLMs para código. A Seção~\ref{sec:relacionados} discute trabalhos correlatos. A Seção~\ref{sec:metodologia} descreve a arquitetura proposta, o \textit{foundation model} e o \textit{dataset} escolhidos. A Seção~\ref{sec:discussao} discute limites e possibilidades. A Seção~\ref{sec:conclusao} apresenta as conclusões e indica trabalhos futuros.
+
+\section{Fundamentação Teórica}
+\label{sec:fundamentacao}
+
+\subsection{Compilação e execução de Python}
+O CPython, implementação de referência da linguagem, utiliza um pipeline clássico: análise léxica, sintática, construção da AST, geração de um grafo de fluxo de controle e, por fim, emissão de \textit{bytecode} interpretado por uma máquina virtual de pilha. Historicamente, o compilador realiza poucas otimizações, limitando-se a \textit{constant folding} e dobramento de expressões simples \cite{cpython_dumb}. A partir do CPython 3.11, a introdução do \textit{specializing adaptive interpreter} (PEP 659) representou um avanço significativo ao permitir especialização dinâmica de instruções do \textit{bytecode} em função dos tipos observados em tempo de execução.
+
+Abordagens alternativas incluem compiladores e JITs como PyPy, Numba, Cython e mypyc, que buscam contornar o dinamismo assumindo tipos (via anotações ou \textit{profiling}) para gerar código nativo mais eficiente \cite{cython_docs}. Contudo, o ganho depende de restrições do programador ou da disponibilidade de informação de tipo em tempo de compilação.
+
+\subsection{Limitações impostas pelo dinamismo}
+Linguagens dinâmicas apresentam características que restringem otimizações estáticas clássicas. Entre elas:
+\begin{itemize}
+  \item \textbf{Tipagem dinâmica:} o tipo de uma variável pode variar ao longo da execução, dificultando especialização e \textit{inline caching}.
+  \item \textbf{Late binding:} a resolução de métodos e funções ocorre em tempo de execução, o que inviabiliza \textit{inlining} estático agressivo.
+  \item \textbf{Reflexão e metaprogramação:} construções como \texttt{getattr}, \texttt{setattr}, \texttt{eval} e \texttt{exec} permitem alterar o programa em execução, comprometendo análises globais.
+  \item \textbf{Monkey patching:} a possibilidade de substituir atributos de classes em tempo de execução anula garantias sobre tabelas de métodos.
+  \item \textbf{GIL:} o \textit{Global Interpreter Lock} restringe o paralelismo real, impondo escolhas específicas ao compilador.
+\end{itemize}
+
+Esses fatores configuram o que denominamos aqui de \textbf{fronteira de otimização estática}: um conjunto de transformações que compiladores convencionais não podem aplicar sem hipóteses adicionais sobre o comportamento do programa.
+
+\subsection{Modelos de Linguagem aplicados a código}
+\textit{Foundation models} treinados em grandes corpora de código-fonte (e.g., GPT-4o, Claude 3.5, Code Llama, DeepSeek-Coder, StarCoder2) apresentam capacidade de compreender padrões algorítmicos, reformular trechos e sugerir transformações equivalentes \cite{cummins2024metacompiler,survey2025}. Diferente de um compilador clássico, um LLM opera de maneira probabilística, não garantindo equivalência semântica a priori. Contudo, ele consegue aplicar transformações de alto nível que dependem de conhecimento algorítmico amplo, algo além do alcance de heurísticas estáticas.
+
+\section{Trabalhos Relacionados}
+\label{sec:relacionados}
+
+Cummins et al. \cite{cummins2023llm} demonstraram que um LLM treinado em um corpus de código LLVM-IR pode prever sequências de passes de otimização capazes de reduzir significativamente o tamanho do código gerado. O trabalho foi posteriormente estendido no \textit{Meta Large Language Model Compiler}, uma família de modelos treinada em 546 bilhões de \textit{tokens} de IR e assembly, voltada explicitamente a tarefas de otimização \cite{cummins2024metacompiler}.
+
+Shypula et al. \cite{shypula2023pie} introduziram o dataset \textit{Performance Improving Edits} (PIE), composto por pares de programas (versão lenta / versão rápida) derivados do IBM Project CodeNet, com extensos testes unitários. O trabalho mostrou que modelos como GPT-3.5 ajustados com estratégias de \textit{retrieval}, \textit{performance-conditioning} e \textit{self-play} podem alcançar \textit{speedups} médios de até 6{,}86$\times$ em tarefas de otimização de código competitivo.
+
+Mais recentemente, \textit{FasterPy} \cite{fasterpy2025} propôs um \textit{framework} específico para otimização de execução de código Python baseado em LLMs, combinando RAG com adaptação parâmetro-eficiente (LoRA) sobre o \textit{benchmark} PIE. Já o \textit{CompilerGPT} \cite{compilergpt2025} automatiza a interação entre compiladores tradicionais (Clang, GCC) e LLMs a partir da leitura de relatórios de otimização, obtendo \textit{speedups} de até 6{,}5$\times$. O \textit{SysLLMatic}, por sua vez, reporta melhorias médias de 1{,}85$\times$ em latência e 2{,}24$\times$ em \textit{throughput} em aplicações de larga escala \cite{sysllmatic2025}.
+
+Em conjunto, esses trabalhos indicam que LLMs são ferramentas competitivas, e muitas vezes complementares, aos compiladores clássicos, principalmente quando as otimizações ocorrem em um nível semântico ou algorítmico mais alto.
+
+\section{Metodologia e Arquitetura Proposta}
+\label{sec:metodologia}
+
+\subsection{Foundation Model}
+Este trabalho adota o GPT-4o como \textit{foundation model} principal, por três razões: (i) desempenho consistentemente alto em benchmarks de código; (ii) \textit{API} pública bem documentada, permitindo reprodutibilidade; e (iii) capacidade de \textit{prompting} em contextos longos, compatível com \textit{Retrieval-Augmented Generation}. Como linha de base comparativa, prevê-se o uso de Claude~3.5 Sonnet e do modelo aberto DeepSeek-Coder, a fim de evitar dependência exclusiva de um fornecedor e avaliar a generalidade da arquitetura.
+
+\subsection{Dataset}
+Como objeto de pesquisa, é utilizado o \textit{benchmark} \textbf{Project\_CodeNet\_Python800} do IBM Project CodeNet \cite{puri2021codenet}, composto por 800 problemas de programação com múltiplas submissões em Python, cada uma anotada com métricas de tempo de CPU e consumo de memória. Como repositório auxiliar de exemplos de otimização, emprega-se o dataset PIE \cite{shypula2023pie}, que fornece pares (versão original, versão otimizada) alinhados para problemas equivalentes. A combinação dos dois permite tanto avaliar o desempenho dos códigos otimizados quanto fornecer ao LLM exemplos de \textit{few-shot} semanticamente alinhados à tarefa corrente.
+
+\subsection{Arquitetura do Pipeline}
+A arquitetura proposta está organizada em cinco módulos, como ilustrado a seguir:
+
+\begin{enumerate}
+    \item \textbf{Módulo de Ingestão:} lê arquivos Python do Project CodeNet e metadados associados (tempo de execução, memória, \textit{status} da submissão).
+    \item \textbf{Módulo de Análise Estática:} constrói a AST via \texttt{ast} da biblioteca padrão, extrai \textit{features} como número de laços, chamadas a funções, uso de estruturas de dados e anotações de tipo (\texttt{typing}). Adicionalmente, infere tipos por meio de \textit{mypy} em modo permissivo.
+    \item \textbf{Módulo de Recuperação (RAG):} dado o código de entrada, recupera do índice vetorial (construído sobre o PIE) os $k$ pares de otimização mais similares utilizando \textit{embeddings} de código (\textit{e.g.}, \texttt{text-embedding-3-large}).
+    \item \textbf{Módulo LLM:} constrói um \textit{prompt} estruturado contendo (a) o código original, (b) as \textit{features} estáticas extraídas, (c) os exemplos recuperados e (d) instruções específicas sobre preservação de semântica. O \textit{prompt} é enviado ao GPT-4o, que retorna o código otimizado.
+    \item \textbf{Módulo de Validação e Avaliação:} executa os testes unitários do Project CodeNet sobre a saída do LLM, compara tempo de execução e consumo de memória contra a versão original e descarta transformações que falhem em preservar a semântica.
+\end{enumerate}
+
+O pipeline completo pode ser visto como um loop assistido por feedback: falhas detectadas no módulo de validação são utilizadas para ajustar o \textit{prompt}, em uma estratégia análoga ao \textit{self-refine}.
+
+\subsection{Métricas de Avaliação}
+A avaliação considera três métricas principais: (i) \textit{speedup} médio em relação à versão original; (ii) taxa de preservação semântica (proporção de códigos otimizados que passam em todos os testes); e (iii) taxa de regressão, isto é, fração de casos em que o código otimizado é mais lento do que o original. Como métrica complementar, mede-se o custo por chamada ao LLM, a fim de avaliar a viabilidade prática da abordagem.
+
+\subsection{Exemplo Ilustrativo}
+A Listagem~\ref{lst:original} apresenta um código tipicamente encontrado no \textit{benchmark} Python800, e a Listagem~\ref{lst:otimizado} mostra uma transformação esperada do LLM.
+
+\begin{lstlisting}[caption={Trecho original com laço explícito.}, label={lst:original}]
+def soma_quadrados(n):
+    total = 0
+    for i in range(n):
+        total = total + i * i
+    return total
+\end{lstlisting}
+
+\begin{lstlisting}[caption={Versão otimizada sugerida pelo LLM.}, label={lst:otimizado}]
+def soma_quadrados(n):
+    # formula fechada: n*(n-1)*(2n-1)/6
+    return n * (n - 1) * (2 * n - 1) // 6
+\end{lstlisting}
+
+Este tipo de transformação algorítmica dificilmente seria produzido por um compilador clássico, pois exige conhecimento semântico sobre o domínio matemático envolvido.
+
+\section{Discussão: Limites e Possibilidades}
+\label{sec:discussao}
+
+\subsection{Limites}
+Os limites observados são de natureza técnica e conceitual. Do ponto de vista técnico, a ausência de garantias formais de equivalência semântica exige validação empírica obrigatória, o que transfere para a etapa de testes um papel crítico. Do ponto de vista conceitual, a tipagem dinâmica de Python continua sendo um obstáculo, pois mesmo uma sugestão correta para um caso específico pode falhar em um contexto onde o tipo inferido pelo LLM não corresponde ao tipo efetivo em tempo de execução.
+
+Ademais, LLMs estão sujeitos a \textit{alucinações}, isto é, geração de código sintaticamente válido, porém semanticamente incorreto. Essa fragilidade reforça a importância de uma etapa de validação baseada em testes unitários, como fornecido pelo Project CodeNet e pelo PIE. Por fim, há uma barreira de custo computacional: chamadas a modelos comerciais têm custo monetário relevante, o que limita a escala em cenários reais.
+
+\subsection{Possibilidades}
+Por outro lado, as possibilidades abertas por LLMs vão além do alcance de compiladores clássicos. Primeiramente, a capacidade de realizar transformações \textbf{algorítmicas}, e não apenas \textit{peephole}, permite obter ganhos significativos em código dinâmico. Em segundo lugar, a integração com \textit{Retrieval-Augmented Generation} possibilita guiar o LLM com exemplos reais de otimização, aproximando sua decisão da prática humana observada em repositórios públicos. Em terceiro lugar, a combinação com análise estática tradicional (AST, inferência de tipos, \textit{control-flow graph}) cria um modelo híbrido que recupera parte do rigor de um compilador sem perder a flexibilidade de um LLM.
+
+Outro ponto promissor é o uso de feedback do próprio compilador ou do \textit{runtime} como entrada adicional ao LLM, estratégia adotada pelo CompilerGPT \cite{compilergpt2025} e pelo Meta LLM Compiler \cite{cummins2024metacompiler}. Essa abordagem pode ser transposta para Python, utilizando informações provenientes do \textit{dis}, do \textit{profiler} \texttt{cProfile} ou do próprio interpretador adaptativo do CPython~3.11+.
+
+\section{Considerações Finais}
+\label{sec:conclusao}
+
+Este artigo investigou os limites e possibilidades do uso de modelos de linguagem na otimização de código Python, um cenário particularmente desafiador dado o dinamismo intrínseco da linguagem. Foi apresentada uma arquitetura baseada em GPT-4o combinada com RAG sobre os \textit{datasets} públicos Project CodeNet e PIE, integrando análise estática e validação semântica. A discussão evidenciou que, embora LLMs não substituam um compilador formal, eles podem atuar como um componente auxiliar capaz de sugerir otimizações algorítmicas de alto nível que estão fora do escopo de otimizadores convencionais.
+
+Como trabalhos futuros, pretende-se (i) implementar e avaliar a arquitetura proposta em um subconjunto representativo do Project\_CodeNet\_Python800; (ii) comparar o desempenho de diferentes \textit{foundation models} sob o mesmo pipeline; (iii) integrar o \textit{feedback} do \textit{bytecode} do CPython 3.11+ como contexto adicional ao LLM; e (iv) investigar estratégias de \textit{fine-tuning} específicas para preservação semântica em linguagens dinâmicas.
+
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+\end{document}
