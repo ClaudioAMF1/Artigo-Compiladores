@@ -31,6 +31,7 @@ sys.path.insert(0, str(HERE))
 
 from bench_utils import benchmark, validate  # noqa: E402
 from optimizer import LLMOptimizer, extract_features  # noqa: E402
+from rule_optimizer import RuleBasedOptimizer  # noqa: E402
 
 DATA_PATH = HERE / "data" / "HumanEval.jsonl.gz"
 
@@ -79,9 +80,28 @@ class RunResult:
     speedup: float
     llm_error: str | None
     llm_latency_s: float
+    rules_applied: list[str]
 
 
-def run_one(sample: Sample, opt: LLMOptimizer, repeats: int, workload: int) -> RunResult:
+class _OptimizerAdapter:
+    """Interface comum para os dois backends (LLM e rule-based)."""
+
+    def __init__(self, backend: str, model: str | None = None) -> None:
+        self.backend = backend
+        if backend == "rule_based":
+            self._impl: Any = RuleBasedOptimizer()
+        else:
+            self._impl = LLMOptimizer(backend=backend, model=model)
+
+    def optimize(self, code: str, entry_point: str) -> tuple[str, list[str]]:
+        if self.backend == "rule_based":
+            code_out, report = self._impl.optimize(code, entry_point)
+            return code_out, list(report.applied)
+        code_out, _feats = self._impl.optimize(code, entry_point)
+        return code_out, []
+
+
+def run_one(sample: Sample, opt: _OptimizerAdapter, repeats: int, workload: int) -> RunResult:
     # 1. Analise estatica
     feats = extract_features(sample.full_code, sample.entry_point)
 
@@ -97,13 +117,14 @@ def run_one(sample: Sample, opt: LLMOptimizer, repeats: int, workload: int) -> R
         workload_multiplier=workload,
     )
 
-    # 4. Modulo LLM
+    # 4. Modulo de otimizacao (LLM ou rule-based)
     llm_error: str | None = None
     llm_latency = 0.0
     optimized_code: str | None = None
+    rules_applied: list[str] = []
     try:
         t0 = time.perf_counter()
-        optimized_code, _ = opt.optimize(sample.full_code, sample.entry_point)
+        optimized_code, rules_applied = opt.optimize(sample.full_code, sample.entry_point)
         llm_latency = time.perf_counter() - t0
     except Exception as e:  # noqa: BLE001
         llm_error = f"{type(e).__name__}: {e}"
@@ -118,11 +139,12 @@ def run_one(sample: Sample, opt: LLMOptimizer, repeats: int, workload: int) -> R
             original_error=v_orig.error,
             original_time_s=b_orig.min_time_s,
             optimized_valid=False,
-            optimized_error="LLM nao retornou codigo",
+            optimized_error="otimizador nao retornou codigo",
             optimized_time_s=0.0,
             speedup=0.0,
             llm_error=llm_error,
             llm_latency_s=llm_latency,
+            rules_applied=rules_applied,
         )
 
     v_opt = validate(optimized_code, sample.test, sample.entry_point)
@@ -151,6 +173,7 @@ def run_one(sample: Sample, opt: LLMOptimizer, repeats: int, workload: int) -> R
         speedup=speedup,
         llm_error=llm_error,
         llm_latency_s=llm_latency,
+        rules_applied=rules_applied,
     )
 
 
@@ -158,7 +181,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Pipeline LLM+HumanEval")
     parser.add_argument("--n", type=int, default=20, help="numero de problemas")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--model", type=str, default="gpt-4o")
+    parser.add_argument(
+        "--backend",
+        type=str,
+        default="rule_based",
+        choices=["rule_based", "gemini", "openai", "groq", "together"],
+        help="backend do otimizador",
+    )
+    parser.add_argument("--model", type=str, default=None)
     parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--workload", type=int, default=200)
     parser.add_argument(
@@ -174,8 +204,9 @@ def main() -> int:
 
     subset = random.sample(all_samples, args.n)
     print(f"[info] subset amostrado: {args.n} problemas (seed={args.seed})")
+    print(f"[info] backend: {args.backend}")
 
-    opt = LLMOptimizer(model=args.model)
+    opt = _OptimizerAdapter(backend=args.backend, model=args.model)
 
     results: list[RunResult] = []
     for i, s in enumerate(subset, start=1):
@@ -196,7 +227,19 @@ def main() -> int:
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", encoding="utf-8") as f:
-        json.dump({"model": args.model, "n": args.n, "seed": args.seed, "results": [asdict(r) for r in results]}, f, indent=2)
+        json.dump(
+            {
+                "backend": args.backend,
+                "model": args.model,
+                "n": args.n,
+                "seed": args.seed,
+                "repeats": args.repeats,
+                "workload_multiplier": args.workload,
+                "results": [asdict(r) for r in results],
+            },
+            f,
+            indent=2,
+        )
     print(f"[info] resultados salvos em {out_path}")
 
     # Resumo

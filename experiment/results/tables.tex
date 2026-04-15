@@ -1,0 +1,60 @@
+\begin{table}[htbp]
+\caption{Resultados agregados sobre os 164 problemas do HumanEval (backend: rule\_based).}
+\label{tab:agregado}
+\centering
+\begin{tabular}{lr}
+\hline
+\textbf{Métrica} & \textbf{Valor} \\
+\hline
+Problemas avaliados & 164 \\
+Preservação semântica & 164/164 (100.0\%) \\
+Problemas melhorados ($>$1{,}05$\times$) & 15 \\
+Problemas neutros & 126 \\
+Regressões ($<$0{,}95$\times$) & 14 \\
+Regras disparadas (pelo menos uma) & 8 \\
+\hline
+Speedup médio aritmético & 5.927$\times$ \\
+Speedup mediano & 1.003$\times$ \\
+Speedup médio harmônico & 0.986$\times$ \\
+Speedup máximo & 615.378$\times$ \\
+Speedup mínimo & 0.361$\times$ \\
+\hline
+\end{tabular}
+\end{table}
+
+\begin{table}[htbp]
+\caption{Detalhe dos problemas nos quais alguma regra do otimizador determinístico foi disparada.}
+\label{tab:detalhe}
+\centering
+\footnotesize
+\begin{tabular}{lllrrr}
+\hline
+\textbf{Task} & \textbf{Função} & \textbf{Regras} & \textbf{Orig. (ms)} & \textbf{Otim. (ms)} & \textbf{Speedup} \\
+\hline
+HumanEval/63 & fibfib & R1\_lru\_cache & 41.60 & 0.07 & 615.378$\times$ \\
+HumanEval/55 & fib & R1\_lru\_cache & 7.97 & 0.05 & 151.818$\times$ \\
+HumanEval/36 & fizz\_buzz & R2\_sum\_builtin & 1679.00 & 1660.74 & 1.011$\times$ \\
+HumanEval/161 & solve & R5\_join & 0.92 & 1.02 & 0.905$\times$ \\
+HumanEval/103 & rounded\_avg & R2\_sum\_builtin & 5.75 & 6.81 & 0.843$\times$ \\
+HumanEval/133 & sum\_squares & R2\_sum\_builtin & 0.80 & 1.35 & 0.593$\times$ \\
+HumanEval/117 & select\_words & R4\_set\_lookup & 3.92 & 7.50 & 0.523$\times$ \\
+HumanEval/74 & total\_match & R2\_sum\_builtin & 0.32 & 0.88 & 0.361$\times$ \\
+\hline
+\end{tabular}
+\end{table}
+
+\begin{table}[htbp]
+\caption{Frequência de aplicação das regras do otimizador determinístico.}
+\label{tab:regras}
+\centering
+\begin{tabular}{lr}
+\hline
+\textbf{Regra} & \textbf{Aplicações} \\
+\hline
+R2\_sum\_builtin & 5 \\
+R1\_lru\_cache & 2 \\
+R5\_join & 1 \\
+R4\_set\_lookup & 1 \\
+\hline
+\end{tabular}
+\end{table}

@@ -155,26 +155,132 @@ def _extract_code(text: str) -> str:
     return text.strip()
 
 
-class LLMOptimizer:
-    """Otimizador baseado em GPT-4o via OpenAI API."""
+# -----------------------------------------------------------------------------
+# Configuracoes de provedores (todos os provedores chamados aqui expoem uma
+# API compativel com a do OpenAI Python SDK, entao basta apontar a base_url e
+# a chave correta).
+# -----------------------------------------------------------------------------
+PROVIDER_CONFIGS: dict[str, dict[str, str]] = {
+    "openai": {
+        "base_url": "https://api.openai.com/v1",
+        "env_var": "OPENAI_API_KEY",
+        "default_model": "gpt-4o",
+    },
+    # Groq Cloud oferece tier gratuito sem cartao de credito, com Llama 3.3
+    # 70B entre outros modelos. Chave gratuita em console.groq.com/keys.
+    "groq": {
+        "base_url": "https://api.groq.com/openai/v1",
+        "env_var": "GROQ_API_KEY",
+        "default_model": "llama-3.3-70b-versatile",
+    },
+    # Together AI tambem tem tier gratuito para alguns modelos.
+    "together": {
+        "base_url": "https://api.together.xyz/v1",
+        "env_var": "TOGETHER_API_KEY",
+        "default_model": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+    },
+    # Google Gemini, endpoint compativel com OpenAI. Tier gratuito via
+    # ai.google.dev (AI Studio). Usado como foundation model principal
+    # neste trabalho por nao haver custo para a pesquisa.
+    "gemini": {
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+        "env_var": "GEMINI_API_KEY",
+        "default_model": "gemini-2.0-flash",
+    },
+}
 
-    def __init__(self, model: str = "gpt-4o", temperature: float = 0.2) -> None:
-        self.model = model
+
+class LLMOptimizer:
+    """Otimizador baseado em LLM via API HTTP.
+
+    Suporta multiplos provedores (openai, groq, together, gemini)
+    selecionados via variavel de ambiente LLM_BACKEND ou argumento
+    explicito. Para provedores compativeis com a API da OpenAI utiliza
+    o SDK `openai`; para o Gemini utiliza a REST API nativa do Google.
+    """
+
+    def __init__(
+        self,
+        backend: str | None = None,
+        model: str | None = None,
+        temperature: float = 0.2,
+    ) -> None:
+        self.backend = (backend or os.environ.get("LLM_BACKEND") or "gemini").lower()
+        if self.backend not in PROVIDER_CONFIGS:
+            raise ValueError(
+                f"backend desconhecido: {self.backend}. "
+                f"Opcoes: {list(PROVIDER_CONFIGS)}"
+            )
+        self.config = PROVIDER_CONFIGS[self.backend]
+        self.model = model or self.config["default_model"]
         self.temperature = temperature
         self._client: Any = None
+        self._api_key: str | None = None
 
-    def _get_client(self) -> Any:
+    def _get_api_key(self) -> str:
+        if self._api_key is None:
+            env_var = self.config["env_var"]
+            api_key = os.environ.get(env_var)
+            if not api_key:
+                raise RuntimeError(
+                    f"{env_var} nao definida. Exporte a chave antes de "
+                    f"executar o pipeline (backend={self.backend})."
+                )
+            self._api_key = api_key
+        return self._api_key
+
+    def _get_openai_client(self) -> Any:
         if self._client is None:
             import openai
 
-            api_key = os.environ.get("OPENAI_API_KEY")
-            if not api_key:
-                raise RuntimeError(
-                    "OPENAI_API_KEY nao definida. Exporte a chave antes "
-                    "de executar o pipeline."
-                )
-            self._client = openai.OpenAI(api_key=api_key)
+            self._client = openai.OpenAI(
+                api_key=self._get_api_key(),
+                base_url=self.config["base_url"],
+            )
         return self._client
+
+    def _call_gemini(self, system_prompt: str, user_prompt: str) -> str:
+        """Chama a REST API nativa do Gemini (sem SDK)."""
+        import requests
+
+        url = (
+            f"https://generativelanguage.googleapis.com/v1beta/"
+            f"models/{self.model}:generateContent"
+        )
+        payload = {
+            "systemInstruction": {"parts": [{"text": system_prompt}]},
+            "contents": [
+                {"role": "user", "parts": [{"text": user_prompt}]}
+            ],
+            "generationConfig": {
+                "temperature": self.temperature,
+                "maxOutputTokens": 2048,
+            },
+        }
+        headers = {
+            "Content-Type": "application/json",
+            "x-goog-api-key": self._get_api_key(),
+        }
+        resp = requests.post(url, headers=headers, json=payload, timeout=60)
+        resp.raise_for_status()
+        data = resp.json()
+        try:
+            return data["candidates"][0]["content"]["parts"][0]["text"]
+        except (KeyError, IndexError) as e:
+            raise RuntimeError(f"resposta inesperada do Gemini: {data}") from e
+
+    def _call_openai_like(self, system_prompt: str, user_prompt: str) -> str:
+        """Chama provedores compativeis com a API da OpenAI."""
+        client = self._get_openai_client()
+        resp = client.chat.completions.create(
+            model=self.model,
+            temperature=self.temperature,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+        )
+        return resp.choices[0].message.content or ""
 
     def optimize(self, code: str, entry_point: str) -> tuple[str, StaticFeatures]:
         """Pede ao LLM uma versao otimizada do codigo.
@@ -187,14 +293,8 @@ class LLMOptimizer:
             features=feats.to_prompt(),
             code=code,
         )
-        client = self._get_client()
-        resp = client.chat.completions.create(
-            model=self.model,
-            temperature=self.temperature,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user},
-            ],
-        )
-        raw = resp.choices[0].message.content or ""
+        if self.backend == "gemini":
+            raw = self._call_gemini(SYSTEM_PROMPT, user)
+        else:
+            raw = self._call_openai_like(SYSTEM_PROMPT, user)
         return _extract_code(raw), feats
