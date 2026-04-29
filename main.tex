@@ -70,13 +70,22 @@ O restante do artigo está organizado da seguinte forma. A Seção~\ref{sec:fund
 \section{Fundamentação Teórica}
 \label{sec:fundamentacao}
 
-\subsection{Compilação e execução de Python}
-O CPython, implementação de referência da linguagem, utiliza um pipeline clássico: análise léxica, sintática, construção da AST, geração de um grafo de fluxo de controle e, por fim, emissão de \textit{bytecode} interpretado por uma máquina virtual de pilha. Historicamente, o compilador realiza poucas otimizações, limitando-se a \textit{constant folding} e dobramento de expressões simples \cite{cpython_dumb}. A partir do CPython 3.11, a introdução do \textit{specializing adaptive interpreter} (PEP 659) representou um avanço significativo ao permitir especialização dinâmica de instruções do \textit{bytecode} em função dos tipos observados em tempo de execução.
+\subsection{Linguagens dinâmicas}
+Linguagens dinâmicas caracterizam-se pela ausência de verificação de tipos em tempo de compilação e pela resolução tardia (\textit{late binding}) de nomes, métodos e atributos. Esse modelo privilegia a flexibilidade --- o programador pode alterar a estrutura de um programa em tempo de execução, redefinir métodos de classes (\textit{monkey patching}) e introspectar quaisquer objetos --- ao custo da previsibilidade necessária para análises estáticas globais. Em termos de compilação, essas características reduzem drasticamente o conjunto de otimizações aplicáveis sem hipóteses adicionais sobre o comportamento do programa.
 
-Abordagens alternativas incluem compiladores e JITs como PyPy, Numba, Cython e mypyc, que buscam contornar o dinamismo assumindo tipos (via anotações ou \textit{profiling}) para gerar código nativo mais eficiente \cite{cython_docs}. Contudo, o ganho depende de restrições do programador ou da disponibilidade de informação de tipo em tempo de compilação.
+\subsection{Python e desempenho}
+O CPython, implementação de referência da linguagem, é uma máquina virtual de pilha que interpreta \textit{bytecode} produzido por um pipeline clássico: análise léxica, sintática, construção da AST, geração de um grafo de fluxo de controle e emissão de \textit{bytecode}. Historicamente, o compilador realiza poucas otimizações, limitando-se a \textit{constant folding} e dobramento de expressões simples \cite{cpython_dumb}. A partir do CPython 3.11, o \textit{specializing adaptive interpreter} (PEP 659) introduziu especialização dinâmica de instruções do \textit{bytecode} em função dos tipos observados em tempo de execução.
+
+Os principais gargalos de desempenho em Python são bem caracterizados \cite{yashwanth_dynamic}: (i) laços interpretados, em razão do \textit{overhead} por iteração da máquina virtual; (ii) alocação intensa de objetos, devido à natureza dos tipos primitivos da linguagem como objetos completos; e (iii) \textit{dynamic dispatch}, decorrente da resolução de métodos em tempo de execução. Abordagens alternativas como PyPy, Numba, Cython e mypyc \cite{cython_docs} buscam contornar o dinamismo assumindo tipos (via anotações ou \textit{profiling}) para gerar código nativo mais eficiente, sempre dependendo, contudo, de restrições adicionais impostas ao programador.
+
+\subsection{Modelos de Linguagem (LLMs)}
+\textit{Foundation models} baseados em arquitetura \textit{Transformer} são treinados em grandes corpora de linguagem natural e código-fonte, internalizando padrões sintáticos, semânticos e algorítmicos. Modelos como GPT-4o, Claude 3.5, Code Llama, DeepSeek-Coder e StarCoder2 demonstram capacidade não apenas de \textbf{gerar código} a partir de descrições em linguagem natural, mas também de \textbf{refatorar} e \textbf{otimizar} código existente \cite{cummins2024metacompiler,survey2025}. Diferentemente de um compilador clássico, um LLM opera de maneira probabilística, não garantindo equivalência semântica a priori; em compensação, é capaz de aplicar transformações de alto nível que dependem de conhecimento algorítmico amplo, fora do alcance de heurísticas estáticas. Essa propriedade torna LLMs especialmente promissores para linguagens dinâmicas, justamente onde o compilador clássico encontra suas maiores barreiras.
+
+\subsection{Otimização de código}
+Otimizações de código podem ser classificadas em três níveis: (i) \textbf{micro-otimizações}, que atuam sobre instruções individuais ou pequenos trechos (e.g., substituição de operadores, \textit{constant folding}); (ii) \textbf{refatoração estrutural}, que reorganiza algoritmos ou estruturas de dados (e.g., memoização, vetorização, troca de estrutura de dados); e (iii) \textbf{paralelização}, que explora execução concorrente em múltiplos núcleos. As métricas usuais de avaliação são \textbf{tempo de execução}, \textbf{uso de memória} e, secundariamente, \textbf{legibilidade} e custo de manutenção do código transformado. Em Python, dado o GIL e o \textit{overhead} da máquina virtual, os ganhos mais substanciais costumam vir do segundo nível, onde LLMs são particularmente competentes.
 
 \subsection{Limitações impostas pelo dinamismo}
-Linguagens dinâmicas apresentam características que restringem otimizações estáticas clássicas. Entre elas:
+As características das linguagens dinâmicas restringem otimizações estáticas clássicas:
 \begin{itemize}
   \item \textbf{Tipagem dinâmica:} o tipo de uma variável pode variar ao longo da execução, dificultando especialização e \textit{inline caching}.
   \item \textbf{Late binding:} a resolução de métodos e funções ocorre em tempo de execução, o que inviabiliza \textit{inlining} estático agressivo.
@@ -87,9 +96,6 @@ Linguagens dinâmicas apresentam características que restringem otimizações e
 
 Esses fatores configuram o que denominamos aqui de \textbf{fronteira de otimização estática}: um conjunto de transformações que compiladores convencionais não podem aplicar sem hipóteses adicionais sobre o comportamento do programa.
 
-\subsection{Modelos de Linguagem aplicados a código}
-\textit{Foundation models} treinados em grandes corpora de código-fonte (e.g., GPT-4o, Claude 3.5, Code Llama, DeepSeek-Coder, StarCoder2) apresentam capacidade de compreender padrões algorítmicos, reformular trechos e sugerir transformações equivalentes \cite{cummins2024metacompiler,survey2025}. Diferente de um compilador clássico, um LLM opera de maneira probabilística, não garantindo equivalência semântica a priori. Contudo, ele consegue aplicar transformações de alto nível que dependem de conhecimento algorítmico amplo, algo além do alcance de heurísticas estáticas.
-
 \section{Trabalhos Relacionados}
 \label{sec:relacionados}
 
@@ -99,7 +105,9 @@ Shypula et al. \cite{shypula2023pie} introduziram o dataset \textit{Performance 
 
 Mais recentemente, \textit{FasterPy} \cite{fasterpy2025} propôs um \textit{framework} específico para otimização de execução de código Python baseado em LLMs, combinando RAG com adaptação parâmetro-eficiente (LoRA) sobre o \textit{benchmark} PIE. Já o \textit{CompilerGPT} \cite{compilergpt2025} automatiza a interação entre compiladores tradicionais (Clang, GCC) e LLMs a partir da leitura de relatórios de otimização, obtendo \textit{speedups} de até 6{,}5$\times$. O \textit{SysLLMatic}, por sua vez, reporta melhorias médias de 1{,}85$\times$ em latência e 2{,}24$\times$ em \textit{throughput} em aplicações de larga escala \cite{sysllmatic2025}.
 
-Em conjunto, esses trabalhos indicam que LLMs são ferramentas competitivas, e muitas vezes complementares, aos compiladores clássicos, principalmente quando as otimizações ocorrem em um nível semântico ou algorítmico mais alto.
+Em uma direção metodológica complementar, o \textit{DocAgent} \cite{yang2025docagent} introduz um sistema multi-agente para geração automatizada de documentação de código que combina análise estática via AST, construção de um grafo de dependências entre componentes (funções, classes, métodos), travessia topológica para construção incremental de contexto e agentes especializados (\textit{Reader}, \textit{Searcher}, \textit{Writer}, \textit{Verifier}, \textit{Orchestrator}). Embora o problema-alvo seja a geração de \textit{docstrings}, e não otimização, dois aspectos da arquitetura do DocAgent são diretamente transponíveis para o pipeline proposto neste artigo: (a) o uso da AST como representação canônica para extrair entidades e suas dependências, evitando que o LLM opere sobre o código-fonte como texto cego; e (b) a presença de um agente \textit{Verifier} que valida factualmente a saída do LLM contra o repositório, mitigando alucinações. Esse padrão é análogo ao módulo de validação por testes unitários adotado em nossa metodologia (Seção~\ref{sec:metodologia}).
+
+Em conjunto, esses trabalhos indicam que LLMs são ferramentas competitivas, e muitas vezes complementares, aos compiladores clássicos, principalmente quando as otimizações ocorrem em um nível semântico ou algorítmico mais alto, e que arquiteturas que acoplam análise estática (AST, grafos de dependência) a um \textit{loop} de geração-com-verificação tendem a produzir resultados mais confiáveis do que prompts diretos sobre o código-fonte.
 
 \section{Metodologia e Arquitetura Proposta}
 \label{sec:metodologia}
@@ -258,6 +266,21 @@ Em contrapartida, os resultados e a literatura apontam possibilidades concretas:
   \item \textbf{Reprodutibilidade com custo zero.} A existência de \textit{foundation models} com \textit{tier} gratuito (Gemini 2.0 Flash, Llama 3.3 via Groq) viabiliza a execução do pipeline proposto em contexto acadêmico sem custo.
 \end{itemize}
 
+\section{Ameaças à Validade}
+\label{sec:ameacas}
+
+Seguindo a taxonomia clássica de pesquisa empírica em engenharia de software, identificam-se as seguintes ameaças aos resultados reportados.
+
+\paragraph{Validade interna} O \textit{benchmark} de tempo de execução é sensível ao ruído do sistema operacional, à variação de \textit{caches} e ao próprio interpretador. Mitigamos esse risco executando 200 repetições do \textit{workload} em cada uma de 5 rodadas e reportando o tempo mínimo, padrão adotado na biblioteca \texttt{timeit}. Ainda assim, \textit{speedups} próximos de $1{,}0\times$ não podem ser interpretados isoladamente e foram, por isso, agrupados na categoria ``neutros''.
+
+\paragraph{Validade de construto} A preservação semântica é aferida pela suíte de testes do HumanEval. Embora a cobertura desses testes seja propositalmente alta para o problema-alvo, equivalência semântica plena requer prova formal, fora do escopo deste trabalho. Transformações localmente corretas mas que dependem de invariantes não testados podem passar despercebidas.
+
+\paragraph{Validade externa} O HumanEval é composto por 164 funções pequenas e autocontidas, com entradas tipicamente reduzidas. Esse perfil favorece micro-benchmarks e penaliza transformações que amortizam custo em entradas grandes (como observado em R2, R4 e R5). A generalização dos achados para código de produção, com classes, dependências externas e \textit{datasets} reais, requer validação adicional sobre repositórios maiores e mais diversos --- lacuna parcialmente endereçada por trabalhos como o DocAgent \cite{yang2025docagent}, que avaliam sistemas baseados em LLM diretamente sobre repositórios reais do GitHub.
+
+\paragraph{Variabilidade do modelo} LLMs são intrinsecamente estocásticos e suas respostas variam com o \textit{prompt}, com o parâmetro de \textit{temperature} e com versões internas do modelo. Os experimentos reportados utilizam o \textit{back-end} determinístico baseado em regras AST como linha de base controlada; resultados específicos do Gemini 2.0 Flash devem ser reproduzidos com seed fixa e versão de modelo congelada antes de qualquer comparação cruzada.
+
+\paragraph{Dataset limitado} O uso exclusivo do HumanEval como universo experimental é uma escolha deliberada por reprodutibilidade, mas restringe a diversidade de domínios. \textit{Datasets} complementares como PIE \cite{shypula2023pie} e Project CodeNet \cite{puri2021codenet} são candidatos naturais para mitigar essa ameaça em trabalhos futuros.
+
 \section{Considerações Finais}
 \label{sec:conclusao}
 
@@ -267,7 +290,9 @@ Os resultados empíricos com o otimizador determinístico baseado em regras de t
 
 Esses resultados reforçam a tese central: abordagens simbólicas são necessárias, porém insuficientes, para otimizar código Python em cenários reais. A integração de LLMs como componente de raciocínio de alto nível no pipeline de compilação constitui uma direção promissora para contornar os limites impostos pelo dinamismo da linguagem.
 
-Como trabalhos futuros, pretende-se: (i) executar o pipeline completo com o \textit{back-end} Gemini 2.0 Flash sobre os 164 problemas do HumanEval e comparar quantitativamente os resultados com o \textit{baseline} determinístico; (ii) integrar \textit{Retrieval-Augmented Generation} (RAG) com o dataset PIE \cite{shypula2023pie} como fonte de exemplos de \textit{few-shot}; (iii) incorporar \textit{feedback} de \textit{bytecode} do CPython 3.11+ como contexto adicional ao LLM; e (iv) avaliar a generalização da arquitetura para outros \textit{datasets} (Project CodeNet Python800, MBPP) e outros \textit{foundation models} (Llama 3.3, DeepSeek-Coder, StarCoder2).
+Como trabalhos futuros, pretende-se: (i) executar o pipeline completo com o \textit{back-end} Gemini 2.0 Flash sobre os 164 problemas do HumanEval e comparar quantitativamente os resultados com o \textit{baseline} determinístico; (ii) integrar \textit{Retrieval-Augmented Generation} (RAG) com o dataset PIE \cite{shypula2023pie} como fonte de exemplos de \textit{few-shot}; (iii) incorporar \textit{feedback} de \textit{bytecode} do CPython 3.11+ como contexto adicional ao LLM; (iv) avaliar a generalização da arquitetura para outros \textit{datasets} (Project CodeNet Python800, MBPP) e outros \textit{foundation models} (Llama 3.3, DeepSeek-Coder, StarCoder2); e (v) explorar uma arquitetura multi-agente inspirada no DocAgent \cite{yang2025docagent}, na qual agentes especializados em análise, transformação e verificação cooperam por meio de um \textit{orchestrator}, com travessia dependência-consciente sobre o grafo de chamadas do programa.
+
+\paragraph{Contribuições esperadas} Em síntese, o presente trabalho contribui com: (1) uma avaliação crítica e reprodutível do uso de IA generativa para otimização de código em uma linguagem dinâmica; (2) a identificação quantitativa dos limites reais de abordagens simbólicas baseadas em padrão sobre AST (cobertura de apenas 4{,}9\% no HumanEval); e (3) diretrizes para o uso seguro de LLMs em pipelines de otimização --- notadamente, a obrigatoriedade de validação semântica por testes, o uso de análise estática como filtro prévio e a adoção de uma malha de verificação inspirada em sistemas como o DocAgent \cite{yang2025docagent}.
 
 \bibliographystyle{IEEEtran}
 \bibliography{references}
