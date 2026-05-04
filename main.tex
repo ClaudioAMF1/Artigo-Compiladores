@@ -171,20 +171,36 @@ O pipeline descrito na Seção~\ref{sec:metodologia} foi executado sobre \textbf
 Problemas avaliados & 164 \\
 Preservação semântica & 164/164 (100{,}0\%) \\
 Problemas melhorados ($>$1{,}05$\times$) & 15 \\
-Problemas neutros & 126 \\
+Problemas neutros [0{,}95;~1{,}05] & 126 \\
 Regressões ($<$0{,}95$\times$) & 14 \\
+Imensuráveis (clock $<$ 1$\mu$s) & 9 \\
 Regras disparadas (pelo menos uma) & 8 \\
 \hline
-Speedup médio aritmético & 5{,}927$\times$ \\
-Speedup mediano & 1{,}003$\times$ \\
-Speedup médio harmônico & 0{,}986$\times$ \\
-Speedup máximo & 615{,}378$\times$ \\
-Speedup mínimo & 0{,}361$\times$ \\
+Speedup médio aritmético\textsuperscript{$\dagger$} & 5{,}927$\times$ \\
+Speedup mediano\textsuperscript{$\dagger$} & 1{,}003$\times$ \\
+Speedup médio harmônico\textsuperscript{$\dagger$} & 0{,}986$\times$ \\
+Speedup máximo\textsuperscript{$\dagger$} & 615{,}378$\times$ \\
+Speedup mínimo\textsuperscript{$\dagger$} & 0{,}361$\times$ \\
 \hline
 \end{tabular}
+\vspace{0.1cm}
+\raggedright
+\scriptsize \textsuperscript{$\dagger$}{Estatísticas calculadas sobre os 155 problemas com tempo mensurável; os 9 problemas em que tanto o tempo original quanto o otimizado caíram abaixo da resolução do clock (1$\mu$s) são excluídos por não fornecerem razão definida.}
 \end{table}
 
 A Tabela~\ref{tab:agregado} sintetiza os resultados. A \textbf{preservação semântica é total}: nenhuma das 164 transformações geradas pelo otimizador determinístico quebrou os testes do HumanEval. Contudo, a grande maioria dos problemas (126 de 164) apresenta \textit{speedup} neutro (entre 0{,}95$\times$ e 1{,}05$\times$), indicando que nenhum padrão sintático das regras implementadas foi detectado. O \textit{speedup} médio aritmético (5{,}927$\times$) é inflado por dois \textit{outliers} de memoização, enquanto o \textit{speedup} mediano (1{,}003$\times$) e a média harmônica (0{,}986$\times$) refletem mais fielmente o impacto típico.
+
+\subsubsection*{Significância estatística}
+A diferença pareada $\Delta_i = t_i^\text{orig} - t_i^\text{opt}$ entre tempos original e otimizado, calculada sobre os 164 problemas, possui média $\bar{\Delta} = 0{,}173$~ms com erro padrão $\mathrm{SE} = 0{,}361$~ms, resultando em estatística $t = 0{,}479$ ($\mathrm{df} = 163$, $p \approx 0{,}63$). O teste \textit{t} pareado, portanto, \textbf{não rejeita} a hipótese nula de que o baseline determinístico não produz redução média de tempo. Adicionalmente, um intervalo de confiança \textit{bootstrap} de 95\% (5\,000 reamostragens) para o \textit{speedup} mediano resultou em [0{,}995;~1{,}007], que inclui $1{,}0$. Em conjunto, esses testes confirmam quantitativamente que, ao nível populacional do HumanEval, a otimização baseada em regras AST tem efeito médio estatisticamente \emph{indistinguível de zero}, sendo os ganhos de fato concentrados em um subconjunto pequeno e identificável de funções recursivas.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.95\columnwidth]{experiment/results/fig_baseline_hist.pdf}
+\caption{Distribuição dos \textit{speedups} (escala $\log_{10}$) para os 155 problemas do HumanEval com tempo mensurável sob o baseline determinístico. A linha pontilhada marca \textit{speedup} = $1\times$.}
+\label{fig:hist_baseline}
+\end{figure}
+
+A Figura~\ref{fig:hist_baseline} corrobora visualmente a análise: a massa de probabilidade está concentrada em torno de zero (i.e., $1\times$), com cauda longa à esquerda (regressões) e dois outliers extremos à direita (memoização).
 
 \subsection{Detalhamento por Regra Aplicada}
 
