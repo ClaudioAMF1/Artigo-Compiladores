@@ -257,6 +257,50 @@ Três observações centrais emergem dos resultados empíricos:
   \item \textbf{Ganhos massivos via transformação algorítmica.} Os dois casos de memoização (R1) comprovam que a maior alavanca de otimização em Python não reside em micro-otimizações de \textit{bytecode}, mas em transformações de nível algorítmico. É precisamente nesse nível que LLMs demonstram maior aptidão, conforme evidenciado pela literatura recente \cite{shypula2023pie,fasterpy2025,sysllmatic2025}.
 \end{enumerate}
 
+\subsection{Análise Qualitativa}
+Para tornar concretos os fenômenos discutidos, examinamos dois casos representativos extraídos da Tabela~\ref{tab:detalhe}: \textbf{HumanEval/55} (\texttt{fib}), em que a regra R1 produz o segundo maior ganho do experimento ($151{,}8\times$), e \textbf{HumanEval/74} (\texttt{total\_match}), em que a regra R2 produz a pior regressão observada ($0{,}36\times$).
+
+\begin{lstlisting}[caption={Original \texttt{fib} (HumanEval/55) --- recursão exponencial.}, label={lst:fib_orig}]
+def fib(n: int):
+    if n == 0: return 0
+    if n == 1: return 1
+    return fib(n-1) + fib(n-2)
+\end{lstlisting}
+
+\begin{lstlisting}[caption={Versão R1 produzida pelo otimizador determinístico --- $O(n)$ amortizado.}, label={lst:fib_r1}]
+from functools import lru_cache
+
+@lru_cache(maxsize=None)
+def fib(n: int):
+    if n == 0: return 0
+    if n == 1: return 1
+    return fib(n-1) + fib(n-2)
+\end{lstlisting}
+
+A transformação no caso da Listagem~\ref{lst:fib_r1} acrescenta um único decorator e reduz a complexidade observável de $O(2^n)$ para $O(n)$ por chamada amortizada, gerando \textit{speedup} medido de $151{,}8\times$. É o tipo de transformação \emph{algorítmica} que um compilador clássico não realiza, pois exige reconhecer que a função é uma recorrência pura sobre inteiros pequenos.
+
+\begin{lstlisting}[caption={Original \texttt{total\_match} (HumanEval/74).}, label={lst:tm_orig}]
+def total_match(lst1, lst2):
+    l1 = 0
+    for st in lst1:
+        l1 += len(st)
+    l2 = 0
+    for st in lst2:
+        l2 += len(st)
+    if l1 <= l2: return lst1
+    else: return lst2
+\end{lstlisting}
+
+\begin{lstlisting}[caption={Versão R2 produzida pelo otimizador determinístico --- regressão de $0{,}36\times$.}, label={lst:tm_r2}]
+def total_match(lst1, lst2):
+    l1 = sum(len(st) for st in lst1)
+    l2 = sum(len(st) for st in lst2)
+    if l1 <= l2: return lst1
+    else: return lst2
+\end{lstlisting}
+
+A versão da Listagem~\ref{lst:tm_r2} é \emph{idiomática} em Python e seria considerada superior em uma revisão de código. No entanto, em \textit{benchmarks} com listas pequenas (entradas típicas do HumanEval contêm de 0 a 5 \textit{strings}) o custo de criar e iterar a expressão geradora supera o ganho da implementação \texttt{sum()} em C, resultando em desempenho 2{,}77 vezes pior. Esse é o exemplo paradigmático de transformação em que a \emph{decisão} requer informação de contexto (tamanho típico da entrada, frequência de chamada) que está fora do alcance do casamento sintático --- e dentro do alcance de um modelo de linguagem com capacidade de raciocinar sobre custo amortizado.
+
 \section{Discussão: Limites e Possibilidades}
 \label{sec:discussao}
 
