@@ -185,7 +185,7 @@ PROVIDER_CONFIGS: dict[str, dict[str, str]] = {
     "gemini": {
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
         "env_var": "GEMINI_API_KEY",
-        "default_model": "gemini-2.0-flash",
+        "default_model": "gemini-2.5-flash",
     },
 }
 
@@ -240,7 +240,10 @@ class LLMOptimizer:
         return self._client
 
     def _call_gemini(self, system_prompt: str, user_prompt: str) -> str:
-        """Chama a REST API nativa do Gemini (sem SDK)."""
+        """Chama a REST API nativa do Gemini (sem SDK), com retry exponencial
+        para erros transitórios (429, 500, 503)."""
+        import time
+
         import requests
 
         url = (
@@ -261,13 +264,22 @@ class LLMOptimizer:
             "Content-Type": "application/json",
             "x-goog-api-key": self._get_api_key(),
         }
-        resp = requests.post(url, headers=headers, json=payload, timeout=60)
-        resp.raise_for_status()
-        data = resp.json()
-        try:
-            return data["candidates"][0]["content"]["parts"][0]["text"]
-        except (KeyError, IndexError) as e:
-            raise RuntimeError(f"resposta inesperada do Gemini: {data}") from e
+        last_error: str = "no attempts"
+        for attempt in range(7):
+            try:
+                resp = requests.post(url, headers=headers, json=payload, timeout=60)
+                if resp.status_code in (429, 500, 502, 503, 504):
+                    last_error = f"HTTP {resp.status_code}: {resp.text[:200]}"
+                    delay = min(60, 3 * (2 ** attempt))
+                    time.sleep(delay)
+                    continue
+                resp.raise_for_status()
+                data = resp.json()
+                return data["candidates"][0]["content"]["parts"][0]["text"]
+            except (requests.RequestException, KeyError, IndexError) as e:
+                last_error = f"{type(e).__name__}: {e}"
+                time.sleep(min(60, 3 * (2 ** attempt)))
+        raise RuntimeError(f"Gemini API falhou após retries: {last_error}")
 
     def _call_openai_like(self, system_prompt: str, user_prompt: str) -> str:
         """Chama provedores compativeis com a API da OpenAI."""
