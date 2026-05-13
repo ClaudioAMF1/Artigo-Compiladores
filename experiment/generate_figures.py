@@ -20,17 +20,17 @@ HERE = Path(__file__).resolve().parent
 
 
 def plot_speedup_hist(results: list[dict], out: Path, label: str) -> None:
+    # Sem titulo interno: o \caption{} do LaTeX cumpre esse papel.
     sps = [x["speedup"] for x in results if x["speedup"] > 0]
-    fig, ax = plt.subplots(figsize=(5.0, 3.0))
+    fig, ax = plt.subplots(figsize=(5.0, 2.6))
     log_sps = [math.log10(s) for s in sps]
     ax.hist(log_sps, bins=30, edgecolor="black", linewidth=0.4)
     ax.axvline(0.0, color="red", linestyle="--", linewidth=1, label=r"speedup $=1\times$")
     ax.set_xlabel(r"$\log_{10}(\mathrm{speedup})$")
     ax.set_ylabel("frequência")
-    ax.set_title(f"Distribuição de speedups ({label}, n={len(sps)})")
     ax.legend(loc="upper right", fontsize=8)
     fig.tight_layout()
-    fig.savefig(out)
+    fig.savefig(out, bbox_inches="tight", pad_inches=0.05)
     plt.close(fig)
 
 
@@ -42,7 +42,7 @@ def plot_scatter(results: list[dict], out: Path, label: str) -> None:
     ]
     if not pts:
         return
-    fig, ax = plt.subplots(figsize=(5.0, 3.0))
+    fig, ax = plt.subplots(figsize=(5.0, 2.6))
     xs, ys = zip(*pts)
     ax.scatter(xs, ys, s=14, alpha=0.6, edgecolor="black", linewidth=0.3)
     lim_min = min(min(xs), min(ys)) * 0.7
@@ -52,10 +52,9 @@ def plot_scatter(results: list[dict], out: Path, label: str) -> None:
     ax.set_yscale("log")
     ax.set_xlabel("tempo original (ms)")
     ax.set_ylabel("tempo otimizado (ms)")
-    ax.set_title(f"Tempo otimizado vs. original ({label})")
     ax.legend(loc="upper left", fontsize=8)
     fig.tight_layout()
-    fig.savefig(out)
+    fig.savefig(out, bbox_inches="tight", pad_inches=0.05)
     plt.close(fig)
 
 

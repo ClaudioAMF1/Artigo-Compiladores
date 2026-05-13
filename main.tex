@@ -260,14 +260,14 @@ Três observações centrais emergem dos resultados empíricos:
 \subsection{Análise Qualitativa}
 Para tornar concretos os fenômenos discutidos, examinamos dois casos representativos extraídos da Tabela~\ref{tab:detalhe}: \textbf{HumanEval/55} (\texttt{fib}), em que a regra R1 produz o segundo maior ganho do experimento ($151{,}8\times$), e \textbf{HumanEval/74} (\texttt{total\_match}), em que a regra R2 produz a pior regressão observada ($0{,}36\times$).
 
-\begin{lstlisting}[caption={Original \texttt{fib} (HumanEval/55) --- recursão exponencial.}, label={lst:fib_orig}]
+\begin{lstlisting}[caption={Original \texttt{fib} (HumanEval/55).}, label={lst:fib_orig}]
 def fib(n: int):
     if n == 0: return 0
     if n == 1: return 1
     return fib(n-1) + fib(n-2)
 \end{lstlisting}
 
-\begin{lstlisting}[caption={Versão R1 produzida pelo otimizador determinístico --- $O(n)$ amortizado.}, label={lst:fib_r1}]
+\begin{lstlisting}[caption={Versão R1 (\texttt{lru\_cache}) --- $O(n)$ amortizado.}, label={lst:fib_r1}]
 from functools import lru_cache
 
 @lru_cache(maxsize=None)
@@ -291,7 +291,7 @@ def total_match(lst1, lst2):
     else: return lst2
 \end{lstlisting}
 
-\begin{lstlisting}[caption={Versão R2 produzida pelo otimizador determinístico --- regressão de $0{,}36\times$.}, label={lst:tm_r2}]
+\begin{lstlisting}[caption={Versão R2 (\texttt{sum()}) --- regressão $0{,}36\times$.}, label={lst:tm_r2}]
 def total_match(lst1, lst2):
     l1 = sum(len(st) for st in lst1)
     l2 = sum(len(st) for st in lst2)
