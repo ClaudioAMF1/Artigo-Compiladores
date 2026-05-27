@@ -187,6 +187,13 @@ PROVIDER_CONFIGS: dict[str, dict[str, str]] = {
         "env_var": "GEMINI_API_KEY",
         "default_model": "gemini-2.5-flash",
     },
+    # GitHub Models (Microsoft): tier gratuito via PAT com escopo Models:Read.
+    # Endpoint OpenAI-compativel. Requer header X-GitHub-Api-Version.
+    "github_models": {
+        "base_url": "https://models.github.ai/inference",
+        "env_var": "GITHUB_TOKEN",
+        "default_model": "openai/gpt-4o-mini",
+    },
 }
 
 
@@ -233,9 +240,13 @@ class LLMOptimizer:
         if self._client is None:
             import openai
 
+            extra_headers = None
+            if self.backend == "github_models":
+                extra_headers = {"X-GitHub-Api-Version": "2022-11-28"}
             self._client = openai.OpenAI(
                 api_key=self._get_api_key(),
                 base_url=self.config["base_url"],
+                default_headers=extra_headers,
             )
         return self._client
 

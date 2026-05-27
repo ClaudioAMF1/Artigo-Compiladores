@@ -1,14 +1,14 @@
 % !TEX program = pdflatex
-% Artigo: Uso de Modelos de Linguagem para Otimizacao de Codigo Python
-% Formato: IEEE Conference Template (IEEEtran)
-% Compilacao no Overleaf: selecionar compilador pdfLaTeX
+% Article: Using Language Models to Optimize Python Code
+% Format: IEEE Conference Template (IEEEtran)
+% Overleaf: select pdfLaTeX compiler
 
 \documentclass[conference]{IEEEtran}
 \IEEEoverridecommandlockouts
 
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
-\usepackage[brazil]{babel}
+\usepackage[english]{babel}
 \usepackage{cite}
 \usepackage{amsmath,amssymb,amsfonts}
 \usepackage{algorithmic}
@@ -35,193 +35,215 @@
 
 \begin{document}
 
-\title{Uso de Modelos de Linguagem para Otimização de Código Python: Limites e Possibilidades em Linguagens Dinâmicas}
+\title{Using Language Models for Python Code Optimization: Limits and Possibilities in Dynamic Languages}
 
 \author{
-\IEEEauthorblockN{Nome do(a) Autor(a)}
-\IEEEauthorblockA{\textit{Curso de Ciência da Computação} \\
-\textit{Universidade / Instituto}\\
-Cidade, Brasil \\
-email@dominio.edu.br}
+\IEEEauthorblockN{Claudio Meireles and Lucas Fiche}
+\IEEEauthorblockA{\textit{Computer Science Program} \\
+\textit{Instituto Brasileiro de Ensino, Desenvolvimento e Pesquisa}\\
+Brasília, Brazil \\
+}
 }
 
 \maketitle
 
 \begin{abstract}
-Modelos de Linguagem de Grande Escala (\textit{Large Language Models} --- LLMs) têm apresentado desempenho expressivo em tarefas de engenharia de software, incluindo transformação e otimização de código. Em linguagens dinâmicas como Python, otimizações clássicas de compilador são historicamente limitadas pelo dinamismo da tipagem, \textit{late binding} e reflexão, fatores que reduzem o espaço de decisão de um compilador estático. Este artigo investiga os limites e possibilidades do uso de LLMs como componente auxiliar ao processo de compilação de código Python, propondo uma arquitetura híbrida baseada em um \textit{foundation model} (Gemini 2.5 Flash Lite) combinado com análise estática via AST e validação semântica sobre o dataset público HumanEval (OpenAI), composto por 164 problemas Python com testes unitários. Como linha de base, é implementado um otimizador determinístico de regras sobre AST, executado sobre todos os 164 problemas. Os resultados empíricos comparam diretamente as duas abordagens: o baseline preserva semântica em 100\% dos casos mas atinge apenas 8 problemas (4{,}9\%) com alguma regra, e seu \textit{speedup} mediano não é estatisticamente significativo (IC 95\% \textit{bootstrap} $[0{,}997;~1{,}008]$); o Gemini melhora 89 dos 164 problemas (54{,}3\%) com \textit{speedup} mediano significativo (IC 95\% $[1{,}071;~1{,}220]$, mediana $1{,}138\times$, máximo $299\times$), ao custo de 6{,}1\% de saídas factualmente incorretas (alucinações detectadas pelos testes). Os achados confirmam quantitativamente o \emph{trade-off} central entre amplitude probabilística e garantia simbólica e justificam arquiteturas híbridas em que análise estática e validação por testes envelopam o LLM.
+Large Language Models (LLMs) have shown remarkable performance in software engineering tasks, including code transformation and optimization. In dynamic languages such as Python, classical compiler optimizations are historically constrained by dynamic typing, late binding, and reflection -- factors that shrink the decision space available to a static compiler. This paper investigates the limits and possibilities of using LLMs as an auxiliary component to the Python compilation process, proposing a hybrid architecture (AST-based static analysis + LLM + test-based validation) evaluated on the public HumanEval dataset (OpenAI), comprising 164 Python problems with unit tests. We conduct a paired comparison of \textbf{four optimization back-ends}: a deterministic AST-rule baseline and \textbf{three LLMs from distinct providers and families} (Gemini 2.5 Flash Lite, Llama 3.3 70B via Groq, and GPT-4o-mini via GitHub Models). Results quantify a structured trade-off: the baseline preserves semantics in 100\% of cases but its median speedup is statistically indistinguishable from $1.0\times$ (95\% bootstrap CI $[0.997;~1.008]$). Across the LLMs, strong heterogeneity is observed: Gemini improves 54.3\% of problems with a significant median speedup ($1.138\times$, CI $[1.071;~1.220]$) and a 6.1\% hallucination rate; GPT-4o-mini improves 37.2\% with a median of $1.018\times$ (not significant) and a 17.7\% hallucination rate; Llama 70B improves 27.4\% with a median of $0.976\times$ (not significant, in fact below 1) and a 23.2\% hallucination rate. This refutes the naive thesis ``LLMs beat the baseline'' and establishes a more precise one: \emph{model choice matters as much as the decision to use an LLM} -- only the LLM best calibrated for the code-transformation task delivers a statistically significant median gain, while LLMs from other families exhibit hallucination rates that neutralize their improvements. The findings support hybrid architectures with mandatory semantic validation and empirical model selection.
 \end{abstract}
 
 \begin{IEEEkeywords}
-Compiladores, Otimização de Código, Python, Linguagens Dinâmicas, Modelos de Linguagem, LLM, Gemini, HumanEval, AST.
+Compilers, Code Optimization, Python, Dynamic Languages, Language Models, LLM, Gemini, Llama, GPT-4o, HumanEval, AST, Empirical Multi-Model Evaluation.
 \end{IEEEkeywords}
 
-\section{Introdução}
+\section{Introduction}
 
-A crescente adoção de Python em domínios como ciência de dados, aprendizado de máquina e automação reforçou a importância de seu desempenho em tempo de execução. Apesar disso, o interpretador de referência CPython oferece otimizações relativamente modestas se comparado a cadeias de compilação maduras como LLVM ou GCC \cite{cpython_dumb}. Essa lacuna decorre, em grande parte, de características da própria linguagem: tipagem dinâmica, \textit{late binding}, \textit{monkey patching} e capacidade de introspecção e modificação do programa em tempo de execução \cite{yashwanth_dynamic}.
+The growing adoption of Python in domains such as data science, machine learning, and automation has reinforced the importance of its runtime performance. Despite this, the reference interpreter CPython provides relatively modest optimizations compared to mature compilation toolchains such as LLVM or GCC \cite{cpython_dumb}. This gap largely stems from features of the language itself: dynamic typing, late binding, monkey patching, and the ability to introspect and modify programs at runtime \cite{yashwanth_dynamic}.
 
-Simultaneamente, Modelos de Linguagem de Grande Escala (LLMs) baseados em \textit{Transformers} vêm sendo empregados com sucesso em tarefas de transformação e otimização de código \cite{cummins2023llm,cummins2024metacompiler,survey2025}. Recentemente, trabalhos específicos têm demonstrado que LLMs podem sugerir transformações de código que resultam em ganhos expressivos de tempo de execução em Python \cite{shypula2023pie,fasterpy2025}. A hipótese central deste trabalho é que LLMs podem atuar como um componente híbrido, complementar às fases de otimização de um compilador Python, operando no nível do código-fonte e no nível do \textit{bytecode}, para reduzir os gargalos impostos pelo dinamismo da linguagem. Como verificação empírica, executamos o pipeline proposto em duas configurações pareadas sobre os 164 problemas do HumanEval, comparando um otimizador determinístico baseado em regras AST com o \textit{foundation model} \textbf{Gemini 2.5 Flash Lite}.
+In parallel, Transformer-based Large Language Models (LLMs) have been successfully employed in code transformation and optimization tasks \cite{cummins2023llm,cummins2024metacompiler,survey2025}. Recent work has shown that LLMs can suggest code transformations that yield substantial runtime improvements in Python \cite{shypula2023pie,fasterpy2025}. The central hypothesis of this work is that LLMs can act as a hybrid component, complementing the optimization phases of a Python compiler, operating both at the source-code and bytecode levels to mitigate the bottlenecks imposed by the language's dynamism. To avoid drawing conclusions from a single model, we run the proposed pipeline in \textbf{four paired configurations} over the 164 HumanEval problems: a deterministic AST-rule baseline and three LLMs from distinct providers and families -- \textbf{Gemini 2.5 Flash Lite} (Google), \textbf{Llama 3.3 70B} (Meta, via Groq), and \textbf{GPT-4o-mini} (OpenAI, via GitHub Models).
 
-Este artigo se propõe a responder à seguinte pergunta de pesquisa: \textit{quais são os limites e as possibilidades do uso de LLMs para otimizar código Python no contexto de uma cadeia de compilação, considerando as restrições impostas por uma linguagem dinâmica?}
+This paper addresses the following research question: \textit{what are the limits and possibilities of using LLMs to optimize Python code in the context of a compilation pipeline, given the constraints imposed by a dynamic language?}
 
-As contribuições deste trabalho são: (i) um levantamento crítico do estado da arte sobre LLMs aplicados a otimização de código, com foco em Python; (ii) uma análise sistemática dos limites impostos pelo dinamismo da linguagem às otimizações estáticas; (iii) uma proposta e implementação de arquitetura híbrida (análise estática via AST + Gemini 2.5 Flash Lite + validação por testes unitários) operando sobre o dataset público HumanEval; e (iv) um estudo empírico pareado sobre os 164 problemas do HumanEval, comparando o LLM contra um otimizador determinístico de regras AST e quantificando, com testes de significância (\textit{t}-pareado, \textit{bootstrap} 95\%), preservação semântica, ganhos e regressões de desempenho.
+The contributions of this work are: (i) a critical survey of the state of the art on LLMs applied to code optimization, with a focus on Python; (ii) a systematic analysis of the limits imposed on static optimizations by the language's dynamism; (iii) the proposal and implementation of a hybrid architecture (AST-based static analysis + interchangeable LLM + test-based validation) operating on the public HumanEval dataset and supporting multiple providers (Google, Groq, OpenAI/GitHub Models, direct OpenAI, Together); and (iv) a paired and \textbf{multi-model} empirical study over the 164 HumanEval problems, comparing three LLMs from distinct families against a deterministic AST-rule optimizer and quantifying, with significance tests (paired \textit{t}-test, 95\% bootstrap CI), semantic preservation, hallucination rate, performance gains, and regressions.
 
-O restante do artigo está organizado da seguinte forma. A Seção~\ref{sec:fundamentacao} apresenta a fundamentação teórica sobre compilação de linguagens dinâmicas e LLMs para código. A Seção~\ref{sec:relacionados} discute trabalhos correlatos. A Seção~\ref{sec:metodologia} descreve a arquitetura proposta, o \textit{foundation model} e o \textit{dataset} escolhidos. A Seção~\ref{sec:resultados} apresenta os resultados experimentais do baseline determinístico e do back-end Gemini, com testes de significância estatística. A Seção~\ref{sec:discussao} discute limites e possibilidades. A Seção~\ref{sec:ameacas} elenca ameaças à validade. A Seção~\ref{sec:conclusao} apresenta as conclusões e indica trabalhos futuros.
+The remainder of the paper is organized as follows. Section~\ref{sec:fundamentacao} presents the theoretical background on dynamic-language compilation and LLMs for code. Section~\ref{sec:relacionados} discusses related work. Section~\ref{sec:metodologia} describes the proposed architecture, the foundation models, and the dataset. Section~\ref{sec:resultados} presents the experimental results of the deterministic baseline and the Gemini back-end, with statistical significance tests. Section~\ref{sec:discussao} discusses limits and possibilities. Section~\ref{sec:ameacas} lists threats to validity. Section~\ref{sec:conclusao} presents the conclusions and outlines future work.
 
-\section{Fundamentação Teórica}
+\section{Theoretical Background}
 \label{sec:fundamentacao}
 
-\subsection{Linguagens dinâmicas}
-Linguagens dinâmicas caracterizam-se pela ausência de verificação de tipos em tempo de compilação e pela resolução tardia (\textit{late binding}) de nomes, métodos e atributos. Esse modelo privilegia a flexibilidade --- o programador pode alterar a estrutura de um programa em tempo de execução, redefinir métodos de classes (\textit{monkey patching}) e introspectar quaisquer objetos --- ao custo da previsibilidade necessária para análises estáticas globais. Em termos de compilação, essas características reduzem drasticamente o conjunto de otimizações aplicáveis sem hipóteses adicionais sobre o comportamento do programa.
+\subsection{Dynamic languages}
+Dynamic languages are characterized by the absence of type checking at compile time and by late binding of names, methods, and attributes. Ousterhout's seminal taxonomy of scripting languages \cite{ousterhout1998scripting} positioned this model as a deliberate engineering trade-off: flexibility -- the programmer can alter a program's structure at runtime, redefine class methods (monkey patching), and introspect any object -- in exchange for the predictability needed for global static analyses defined in the classical compiler literature \cite{aho2006compilers,cooper2011engineering}.
 
-\subsection{Python e desempenho}
-O CPython, implementação de referência da linguagem, é uma máquina virtual de pilha que interpreta \textit{bytecode} produzido por um pipeline clássico: análise léxica, sintática, construção da AST, geração de um grafo de fluxo de controle e emissão de \textit{bytecode}. Historicamente, o compilador realiza poucas otimizações, limitando-se a \textit{constant folding} e dobramento de expressões simples \cite{cpython_dumb}. A partir do CPython 3.11, o \textit{specializing adaptive interpreter} (PEP 659) introduziu especialização dinâmica de instruções do \textit{bytecode} em função dos tipos observados em tempo de execução.
+The empirical literature has measured the practical magnitude of this dynamism. Richards et al.~\cite{richards2010javascript}, in a landmark study published at PLDI~2010, observed that real-world JavaScript programs systematically violate the very assumptions made by static analyses and JIT compilers -- e.g., extensive runtime use of \texttt{eval}, dynamic prototype modification, and polymorphic call sites. For Python, Holkner and Harland \cite{holkner2009python}, in an ACSC~2009 study of widely used applications, found that the most aggressively dynamic constructs (\texttt{exec}, class mutation, attribute injection) appear predominantly during initialization phases but rarely in steady-state hot loops, suggesting that a meaningful subset of code could in principle be specialized. Complementing this picture, {\AA}kerblom and Wrigstad \cite{akerblom2014polymorphism} quantified the polymorphism of Python programs at DLS~2014 and showed that, although the language permits unrestricted polymorphism, the majority of call sites in benchmark suites are effectively monomorphic at runtime -- a property that JIT-based implementations explicitly exploit.
 
-Os principais gargalos de desempenho em Python são bem caracterizados \cite{yashwanth_dynamic}: (i) laços interpretados, em razão do \textit{overhead} por iteração da máquina virtual; (ii) alocação intensa de objetos, devido à natureza dos tipos primitivos da linguagem como objetos completos; e (iii) \textit{dynamic dispatch}, decorrente da resolução de métodos em tempo de execução. Abordagens alternativas como PyPy, Numba, Cython e mypyc \cite{cython_docs} buscam contornar o dinamismo assumindo tipos (via anotações ou \textit{profiling}) para gerar código nativo mais eficiente, sempre dependendo, contudo, de restrições adicionais impostas ao programador.
+\subsection{Python and performance}
+CPython, the reference implementation of the language, is a stack-based virtual machine that interprets bytecode produced by a classical pipeline: lexical and syntactic analysis, AST construction, control-flow graph generation, and bytecode emission \cite{aho2006compilers}. Historically, the compiler performs few optimizations, limited to constant folding and folding of simple expressions \cite{cpython_dumb}. Starting with CPython 3.11, the specializing adaptive interpreter introduced by PEP 659 \cite{pep659} enabled dynamic specialization of bytecode instructions based on types observed at runtime, importing into CPython ideas previously confined to JIT implementations.
 
-\subsection{Modelos de Linguagem (LLMs)}
-\textit{Foundation models} baseados em arquitetura \textit{Transformer} são treinados em grandes corpora de linguagem natural e código-fonte, internalizando padrões sintáticos, semânticos e algorítmicos. Modelos como GPT-4o, Claude 3.5, Code Llama, DeepSeek-Coder e StarCoder2 demonstram capacidade não apenas de \textbf{gerar código} a partir de descrições em linguagem natural, mas também de \textbf{refatorar} e \textbf{otimizar} código existente \cite{cummins2024metacompiler,survey2025}. Diferentemente de um compilador clássico, um LLM opera de maneira probabilística, não garantindo equivalência semântica a priori; em compensação, é capaz de aplicar transformações de alto nível que dependem de conhecimento algorítmico amplo, fora do alcance de heurísticas estáticas. Essa propriedade torna LLMs especialmente promissores para linguagens dinâmicas, justamente onde o compilador clássico encontra suas maiores barreiras.
+The main performance bottlenecks in Python are well characterized \cite{yashwanth_dynamic,holkner2009python}: (i) interpreted loops, due to per-iteration overhead of the virtual machine; (ii) heavy object allocation, due to the language's primitive types being full objects; and (iii) dynamic dispatch, stemming from runtime method resolution. Alternative implementations attempt to bypass dynamism through different strategies: \textbf{PyPy} \cite{bolz2009tracing} uses a meta-tracing JIT to specialize hot paths on observed types; \textbf{Numba} \cite{lam2015numba} compiles annotated numerical kernels to LLVM IR; and \textbf{Cython} \cite{behnel2011cython,cython_docs} statically translates type-annotated Python to C extension modules. All three trade some of Python's expressiveness for native-level performance.
 
-\subsection{Otimização de código}
-Otimizações de código podem ser classificadas em três níveis: (i) \textbf{micro-otimizações}, que atuam sobre instruções individuais ou pequenos trechos (e.g., substituição de operadores, \textit{constant folding}); (ii) \textbf{refatoração estrutural}, que reorganiza algoritmos ou estruturas de dados (e.g., memoização, vetorização, troca de estrutura de dados); e (iii) \textbf{paralelização}, que explora execução concorrente em múltiplos núcleos. As métricas usuais de avaliação são \textbf{tempo de execução}, \textbf{uso de memória} e, secundariamente, \textbf{legibilidade} e custo de manutenção do código transformado. Em Python, dado o GIL e o \textit{overhead} da máquina virtual, os ganhos mais substanciais costumam vir do segundo nível, onde LLMs são particularmente competentes.
+Performance issues and optimization opportunities have been studied at the empirical software-engineering level as well. Selakovic and Pradel \cite{selakovic2016performance}, at ICSE~2016, conducted a large-scale empirical study of performance issues in JavaScript projects and identified recurrent anti-patterns -- such as inefficient choice of data structure, redundant property accesses, and avoidable object allocations -- that are largely transferable to Python given the structural similarities between the two languages. Nistor et al.~\cite{nistor2013performance}, at MSR~2013, examined how performance bugs are discovered and fixed in practice in large open-source projects, observing that they take substantially longer to detect than functional bugs and frequently require non-local reasoning that goes beyond compile-time analysis.
 
-\subsection{Limitações impostas pelo dinamismo}
-As características das linguagens dinâmicas restringem otimizações estáticas clássicas:
+\subsection{Language Models (LLMs)}
+Modern language models are built on the Transformer architecture \cite{vaswani2017attention}, whose self-attention mechanism enabled scaling to billions of parameters. Brown et al.~\cite{brown2020gpt3} demonstrated with GPT-3 that, at sufficient scale, these models acquire emergent few-shot learning abilities without task-specific fine-tuning. The application of this paradigm to source code was systematized by Chen et al.~\cite{chen2021humaneval} with Codex and the HumanEval benchmark, and developed further by encoder representations such as CodeBERT \cite{feng2020codebert}, which jointly models natural and programming languages on bimodal pre-training data.
+
+Recent surveys have mapped the breadth of LLM applications in software engineering. Fan et al.~\cite{fan2024llmse}, in their ICSE~2024 Future-of-SE paper, identify code generation, repair, summarization, testing, and optimization as core tasks where LLMs already match or exceed traditional approaches in several benchmarks. Hou et al.~\cite{hou2024llmse}, in a systematic literature review published at ACM TOSEM in 2024, classify over 200 papers along training paradigms, prompting strategies, and evaluation methodologies, providing a structural map of the field. In the optimization sub-area specifically, dedicated surveys \cite{survey2025} and benchmark frameworks \cite{cummins2024metacompiler} confirm that LLMs are competitive with handcrafted heuristic compilers for selecting and ordering optimization passes.
+
+Unlike a classical compiler, an LLM operates probabilistically, providing no a priori guarantee of semantic equivalence; in return, it can apply high-level transformations that rely on broad algorithmic knowledge, beyond the reach of static heuristics. This property makes LLMs especially promising for dynamic languages -- precisely where classical compilers face their largest barriers.
+
+\subsection{Code optimization}
+The classical compiler literature \cite{aho2006compilers,cooper2011engineering} organizes optimizations into three levels of granularity, all of which remain relevant when an LLM is introduced as a candidate generator: (i) \textbf{micro-optimizations}, which act on individual instructions or small fragments (e.g., operator replacement, constant folding); (ii) \textbf{structural refactoring}, which reorganizes algorithms or data structures (e.g., memoization, vectorization, data-structure substitution); and (iii) \textbf{parallelization}, which exploits concurrent execution on multiple cores. Standard evaluation metrics are \textbf{execution time}, \textbf{memory usage}, and, secondarily, \textbf{readability} and maintenance cost of the transformed code -- the latter increasingly emphasized in empirical studies of optimization in real-world software \cite{selakovic2016performance,nistor2013performance}. In Python, given the GIL and the VM overhead, the most substantial gains typically come from the second level, where LLMs are particularly competent.
+
+\subsection{Limits imposed by dynamism}
+The characteristics of dynamic languages constrain classical static optimizations:
 \begin{itemize}
-  \item \textbf{Tipagem dinâmica:} o tipo de uma variável pode variar ao longo da execução, dificultando especialização e \textit{inline caching}.
-  \item \textbf{Late binding:} a resolução de métodos e funções ocorre em tempo de execução, o que inviabiliza \textit{inlining} estático agressivo.
-  \item \textbf{Reflexão e metaprogramação:} construções como \texttt{getattr}, \texttt{setattr}, \texttt{eval} e \texttt{exec} permitem alterar o programa em execução, comprometendo análises globais.
-  \item \textbf{Monkey patching:} a possibilidade de substituir atributos de classes em tempo de execução anula garantias sobre tabelas de métodos.
-  \item \textbf{GIL:} o \textit{Global Interpreter Lock} restringe o paralelismo real, impondo escolhas específicas ao compilador.
+  \item \textbf{Dynamic typing:} a variable's type can change throughout execution, hampering specialization and inline caching \cite{richards2010javascript}.
+  \item \textbf{Late binding:} method and function resolution happens at runtime, ruling out aggressive static inlining \cite{akerblom2014polymorphism}.
+  \item \textbf{Reflection and metaprogramming:} constructs such as \texttt{getattr}, \texttt{setattr}, \texttt{eval}, and \texttt{exec} can alter the running program, breaking global analyses \cite{holkner2009python}.
+  \item \textbf{Monkey patching:} the ability to replace class attributes at runtime invalidates guarantees about method tables.
+  \item \textbf{GIL:} the Global Interpreter Lock constrains real parallelism, imposing specific choices on the compiler.
 \end{itemize}
 
-Esses fatores configuram o que denominamos aqui de \textbf{fronteira de otimização estática}: um conjunto de transformações que compiladores convencionais não podem aplicar sem hipóteses adicionais sobre o comportamento do programa.
+These factors define what we call the \textbf{static optimization frontier}: a set of transformations that conventional compilers cannot apply without additional assumptions about program behavior. Crossing this frontier without abandoning correctness is precisely the role that LLMs, combined with a test-based validation harness, may play in a modern Python compilation pipeline -- a direction supported both by recent empirical literature on LLMs in software engineering \cite{fan2024llmse,hou2024llmse} and by the experimental evidence presented in Section~\ref{sec:resultados}.
 
-\section{Trabalhos Relacionados}
+\section{Related Work}
 \label{sec:relacionados}
 
-Cummins et al. \cite{cummins2023llm} demonstraram que um LLM treinado em um corpus de código LLVM-IR pode prever sequências de passes de otimização capazes de reduzir significativamente o tamanho do código gerado. O trabalho foi posteriormente estendido no \textit{Meta Large Language Model Compiler}, uma família de modelos treinada em 546 bilhões de \textit{tokens} de IR e assembly, voltada explicitamente a tarefas de otimização \cite{cummins2024metacompiler}.
+Cummins et al.~\cite{cummins2023llm} showed that an LLM trained on a corpus of LLVM-IR code can predict sequences of optimization passes that significantly reduce the size of generated code. The work was later extended in the \textit{Meta Large Language Model Compiler}, a family of models trained on 546 billion tokens of IR and assembly, explicitly aimed at optimization tasks \cite{cummins2024metacompiler}.
 
-Shypula et al. \cite{shypula2023pie} introduziram o dataset \textit{Performance Improving Edits} (PIE), composto por pares de programas (versão lenta / versão rápida) derivados do IBM Project CodeNet, com extensos testes unitários. O trabalho mostrou que modelos como GPT-3.5 ajustados com estratégias de \textit{retrieval}, \textit{performance-conditioning} e \textit{self-play} podem alcançar \textit{speedups} médios de até 6{,}86$\times$ em tarefas de otimização de código competitivo.
+Shypula et al.~\cite{shypula2023pie} introduced the \textit{Performance Improving Edits} (PIE) dataset, composed of program pairs (slow / fast versions) derived from the IBM Project CodeNet, with extensive unit tests. The work showed that models such as GPT-3.5 fine-tuned with retrieval, performance-conditioning, and self-play strategies can achieve average speedups of up to $6.86\times$ in competitive code optimization tasks.
 
-Mais recentemente, \textit{FasterPy} \cite{fasterpy2025} propôs um \textit{framework} específico para otimização de execução de código Python baseado em LLMs, combinando RAG com adaptação parâmetro-eficiente (LoRA) sobre o \textit{benchmark} PIE. Já o \textit{CompilerGPT} \cite{compilergpt2025} automatiza a interação entre compiladores tradicionais (Clang, GCC) e LLMs a partir da leitura de relatórios de otimização, obtendo \textit{speedups} de até 6{,}5$\times$. O \textit{SysLLMatic}, por sua vez, reporta melhorias médias de 1{,}85$\times$ em latência e 2{,}24$\times$ em \textit{throughput} em aplicações de larga escala \cite{sysllmatic2025}.
+More recently, \textit{FasterPy} \cite{fasterpy2025} proposed a framework specific to LLM-based Python runtime optimization, combining RAG with parameter-efficient adaptation (LoRA) on the PIE benchmark. \textit{CompilerGPT} \cite{compilergpt2025} automates the interaction between traditional compilers (Clang, GCC) and LLMs by parsing optimization reports, achieving speedups of up to $6.5\times$. \textit{SysLLMatic} reports average improvements of $1.85\times$ in latency and $2.24\times$ in throughput in large-scale applications \cite{sysllmatic2025}.
 
-Em uma direção metodológica complementar, o \textit{DocAgent} \cite{yang2025docagent} introduz um sistema multi-agente para geração automatizada de documentação de código que combina análise estática via AST, construção de um grafo de dependências entre componentes (funções, classes, métodos), travessia topológica para construção incremental de contexto e agentes especializados (\textit{Reader}, \textit{Searcher}, \textit{Writer}, \textit{Verifier}, \textit{Orchestrator}). Embora o problema-alvo seja a geração de \textit{docstrings}, e não otimização, dois aspectos da arquitetura do DocAgent são diretamente transponíveis para o pipeline proposto neste artigo: (a) o uso da AST como representação canônica para extrair entidades e suas dependências, evitando que o LLM opere sobre o código-fonte como texto cego; e (b) a presença de um agente \textit{Verifier} que valida factualmente a saída do LLM contra o repositório, mitigando alucinações. Esse padrão é análogo ao módulo de validação por testes unitários adotado em nossa metodologia (Seção~\ref{sec:metodologia}).
+In a complementary methodological direction, \textit{DocAgent} \cite{yang2025docagent} introduces a multi-agent system for automated code documentation generation that combines AST-based static analysis, construction of a dependency graph among components (functions, classes, methods), topological traversal for incremental context building, and specialized agents (\textit{Reader}, \textit{Searcher}, \textit{Writer}, \textit{Verifier}, \textit{Orchestrator}). Although the target problem is docstring generation rather than optimization, two aspects of the DocAgent architecture transfer directly to the pipeline proposed here: (a) the use of the AST as a canonical representation to extract entities and their dependencies, preventing the LLM from operating on the source code as opaque text; and (b) the presence of a \textit{Verifier} agent that factually validates the LLM's output against the repository, mitigating hallucinations. This pattern is analogous to the test-based validation module adopted in our methodology (Section~\ref{sec:metodologia}).
 
-Em conjunto, esses trabalhos indicam que LLMs são ferramentas competitivas, e muitas vezes complementares, aos compiladores clássicos, principalmente quando as otimizações ocorrem em um nível semântico ou algorítmico mais alto, e que arquiteturas que acoplam análise estática (AST, grafos de dependência) a um \textit{loop} de geração-com-verificação tendem a produzir resultados mais confiáveis do que prompts diretos sobre o código-fonte.
+The use of machine learning for automatic code transformation predates the modern LLM era. Silva \cite{silva2020ferramenta}, in a 2020 bachelor's monograph at the Universidade Federal Rural do Semi-{\'A}rido (UFERSA), proposed a tool that uses an LSTM recurrent neural network to suggest token-level corrections for syntactic errors in introductory programming code, operating on a tokenized representation produced by ANTLR. That work is a direct precursor to ours along two axes and a useful contrast point along a third. Methodologically, both pipelines tokenize the source program and let a neural model predict transformations on the token stream; architecturally, however, Silva's LSTM is bounded by relatively local context, while modern Transformer-based LLMs leverage attention over much longer spans, enabling the algorithmic-level transformations (memoization, closed-form replacements, primitive substitutions) that our experiments confirm in Section~\ref{sec:llmvsbase}. The third axis -- task -- is complementary rather than overlapping: Silva targets \emph{syntactic correctness} for novice code, whereas this work targets \emph{performance optimization} for code that is already syntactically and semantically correct. The combined picture suggests that the broader research agenda of \textit{neural code transformation} has matured from local repair toward global, performance-aware rewriting as model architectures and training data have scaled.
 
-\section{Metodologia e Arquitetura Proposta}
+The recent empirical software-engineering literature converges on three observations directly relevant to our methodology. First, pre-trained code models differ substantially among themselves: Niu et al.~\cite{niu2023empirical}, at ICSE 2023, conducted a head-to-head evaluation of multiple pre-trained source-code models and observed effect sizes between models that exceeded the differences between fine-tuning strategies -- foreshadowing the model-choice-matters finding we report in Section~\ref{sec:llmvsbase}. Second, LLM outputs show systematic quality issues that demand explicit mitigation: Liu et al.~\cite{liu2024refining}, in ACM TOSEM 2024, characterized recurring code-quality problems in ChatGPT-generated Python code and proposed automated refinement strategies, while Mastropaolo et al.~\cite{mastropaolo2023robustness}, at ICSE 2023, showed that GitHub Copilot's outputs vary considerably under semantically equivalent prompt perturbations. Third, LLMs are nonetheless effective at code-transformation tasks beyond pure generation: Jiang et al.~\cite{jiang2023impact}, at ICSE 2023, demonstrated that code language models substantially improve automated program repair, and Pan et al.~\cite{pan2024lost}, at ICSE 2024, dissected the bugs LLMs introduce while translating code between languages -- a closely related task to ours that confirms the necessity of test-based validation. Finally, Nam et al.~\cite{nam2024using}, at ICSE 2024, found that LLMs measurably help developers understand unfamiliar code -- a usability dimension complementary to the runtime-performance focus of this work.
+
+Taken together, these works indicate that LLMs are competitive -- and often complementary -- to classical compilers, especially when optimizations occur at a higher semantic or algorithmic level, and that architectures that couple static analysis (AST, dependency graphs) with a generation-with-verification loop tend to produce more reliable results than direct prompts over source code.
+
+\section{Methodology and Proposed Architecture}
 \label{sec:metodologia}
 
-\subsection{Foundation Model}
-Este trabalho adota o \textbf{Gemini 2.5 Flash Lite} como \textit{foundation model} principal, acessado via API pública do Google AI Studio (REST). A escolha justifica-se pelas seguintes razões: (i) desempenho consistentemente alto em benchmarks de código; (ii) existência de um \textit{tier} gratuito com cota diária suficiente para os 164 problemas, viabilizando reprodutibilidade acadêmica sem custo; e (iii) tempo de resposta baixo (mediana ${\sim}1{-}5$\,s/chamada), adequado à execução iterativa sobre um \textit{dataset}. A configuração de inferência fixa \textit{temperature} = $0{,}2$ e \textit{max\_output\_tokens} = $2048$, com \textit{retry} exponencial de até 7 tentativas para erros transitórios (HTTP 429/5xx). Para isolar o efeito do LLM, é adicionalmente implementado um otimizador determinístico baseado em transformações sobre AST, utilizado como \textbf{linha de base (\textit{baseline})}. Essa comparação permite quantificar o ganho marginal trazido pelo LLM em relação a heurísticas puramente simbólicas.
+\subsection{Foundation Models}
+To avoid conclusions biased by a single model, this work evaluates \textbf{three LLMs from distinct providers and families}, all accessed via free tier with no monetary cost:
+
+\begin{itemize}
+  \item \textbf{Gemini 2.5 Flash Lite} (Google): accessed via REST through Google AI Studio. Proprietary model with a compact architecture optimized for low latency.
+  \item \textbf{Llama 3.3 70B} (Meta): accessed via the Groq API, which serves the open-weight model on specialized inference hardware. Open model with 70 billion parameters.
+  \item \textbf{GPT-4o-mini} (OpenAI): accessed via GitHub Models (Microsoft), which offers a free tier for the OpenAI ecosystem via a PAT with the \texttt{Models:Read} scope. Proprietary model, mid-size class.
+\end{itemize}
+
+All three were configured with the same hyperparameters (temperature = $0.2$, max\_output\_tokens = $2048$) and received the same structured prompt, ensuring comparability. Each provider exposes an OpenAI-compatible SDK API or a simple REST endpoint, allowing transparent back-end interchangeability in the pipeline. For transient errors (HTTP 429/5xx, common in free tiers), the client implements exponential retry of up to 7 attempts with backoff of up to 60 s.
+
+To isolate the effect of the LLM paradigm itself, we additionally implement a deterministic AST-based rule optimizer used as the \textbf{baseline}. The paired comparison between the baseline and the three LLMs allows three effects to be separated: (a) the gain of the symbolic vs.\ probabilistic paradigm, (b) variation across distinct LLM families, and (c) the effect of the specific model choice within the LLM paradigm.
 
 \subsection{Dataset}
-Como objeto de pesquisa, é utilizado o \textbf{HumanEval} \cite{chen2021humaneval}, \textit{dataset} público mantido pela OpenAI e disponível em repositório Git aberto\footnote{\url{https://github.com/openai/human-eval}}. O HumanEval é composto por 164 problemas de programação em Python, cada um contendo: (i) um cabeçalho com assinatura, \textit{docstring} e exemplos; (ii) uma solução canônica (\texttt{canonical\_solution}); e (iii) uma função \texttt{check(candidate)} contendo as asserções que definem a corretude funcional. A escolha do HumanEval deve-se à sua ampla adoção como referência em pesquisa de Code LLMs, à qualidade de seus testes unitários e ao fato de ser 100\% Python. Para o papel de repositório auxiliar de exemplos de otimização (\textit{few-shot}), o dataset PIE \cite{shypula2023pie} permanece como fonte de pares (versão lenta, versão rápida) para futuras extensões.
+As the research subject, we use \textbf{HumanEval} \cite{chen2021humaneval}, a public dataset maintained by OpenAI and available in an open Git repository\footnote{\url{https://github.com/openai/human-eval}}. HumanEval comprises 164 Python programming problems, each containing: (i) a header with the signature, docstring, and examples; (ii) a canonical solution (\texttt{canonical\_solution}); and (iii) a function \texttt{check(candidate)} containing the assertions that define functional correctness. HumanEval was chosen due to its broad adoption as a reference in Code LLM research, the quality of its unit tests, and the fact that it is 100\% Python. As an auxiliary repository of optimization examples (few-shot), the PIE dataset \cite{shypula2023pie} remains a source of (slow, fast) pairs for future extensions.
 
-\subsection{Arquitetura do Pipeline}
-A arquitetura proposta está organizada em cinco módulos, descritos a seguir:
+\subsection{Pipeline Architecture}
+The proposed architecture is organized in five modules, described below:
 
 \begin{enumerate}
-    \item \textbf{Módulo de Ingestão:} lê os 164 problemas do HumanEval diretamente do arquivo \texttt{HumanEval.jsonl.gz} fornecido pelo repositório oficial, extraindo \texttt{prompt}, \texttt{canonical\_solution}, \texttt{entry\_point} e \texttt{test}.
-    \item \textbf{Módulo de Análise Estática:} constrói a AST do código completo (\texttt{prompt + canonical\_solution}) via módulo \texttt{ast} da biblioteca padrão e extrai \textit{features} numéricas: quantidade de funções, laços, profundidade máxima de aninhamento, chamadas de função, chamadas recursivas ao \textit{entry point}, \textit{comprehensions} e presença de anotações de tipo.
-    \item \textbf{Módulo de Otimização:} aceita dois \textit{back-ends} intercambiáveis via parâmetro de configuração: (a) \texttt{gemini} --- encaminha o código e as \textit{features} ao Gemini 2.5 Flash Lite por meio de um \textit{prompt} estruturado em português que exige preservação rigorosa da assinatura e da semântica; (b) \texttt{rule\_based} --- aplica uma sequência determinística de transformações sobre a AST: R1 memoização via \texttt{functools.lru\_cache}, R2 substituição de somatório manual por \texttt{sum()}, R4 \texttt{frozenset} para testes de pertencimento e R5 \texttt{join} para concatenação de strings em laço.
-    \item \textbf{Módulo de Validação:} compila o código retornado, executa a função \texttt{check(candidate)} do HumanEval sob \texttt{SIGALRM} com \textit{timeout} de 10\,s e descarta a transformação caso qualquer asserção falhe ou haja exceção.
-    \item \textbf{Módulo de \textit{Benchmark}:} constrói um \textit{workload} reprodutível a partir das próprias chamadas \texttt{candidate(\ldots)} presentes no teste oficial do problema, executa o \textit{workload} \textbf{200 vezes em cada uma de 5 repetições} e reporta o tempo mínimo (para minimizar ruído). O \textit{speedup} é definido por $s = t_\text{orig}^\text{min}/t_\text{opt}^\text{min}$.
+    \item \textbf{Ingestion Module:} reads the 164 HumanEval problems directly from the official \texttt{HumanEval.jsonl.gz} file, extracting \texttt{prompt}, \texttt{canonical\_solution}, \texttt{entry\_point}, and \texttt{test}.
+    \item \textbf{Static Analysis Module:} builds the AST of the full code (\texttt{prompt + canonical\_solution}) via the standard \texttt{ast} module and extracts numerical features: number of functions, loops, maximum nesting depth, function calls, recursive calls to the entry point, comprehensions, and presence of type annotations.
+    \item \textbf{Optimization Module:} accepts interchangeable back-ends via a configuration parameter: (a) \texttt{gemini}/\texttt{groq}/\texttt{github\_models} -- forwards the code and the features to the corresponding LLM through a structured prompt that demands strict signature and semantics preservation; (b) \texttt{rule\_based} -- applies a deterministic sequence of AST transformations: R1 memoization via \texttt{functools.lru\_cache}, R2 manual summation replaced by \texttt{sum()}, R4 \texttt{frozenset} for membership tests, and R5 \texttt{join} for string concatenation in a loop.
+    \item \textbf{Validation Module:} compiles the returned code, executes the \texttt{check(candidate)} function of HumanEval under \texttt{SIGALRM} with a 10-second timeout, and discards the transformation if any assertion fails or an exception is raised.
+    \item \textbf{Benchmark Module:} builds a reproducible workload from the very \texttt{candidate(\ldots)} calls present in the official problem test, runs the workload \textbf{200 times in each of 5 repetitions}, and reports the minimum time (to minimize noise). The speedup is defined as $s = t_\text{orig}^\text{min}/t_\text{opt}^\text{min}$.
 \end{enumerate}
 
-O pipeline completo pode ser interpretado como um \textit{loop} assistido por \textit{feedback}: falhas detectadas no módulo de validação podem ser reintroduzidas no \textit{prompt} em uma estratégia análoga ao \textit{self-refine}.
+The complete pipeline can be interpreted as a feedback-assisted loop: failures detected in the validation module can be re-introduced into the prompt in a strategy analogous to self-refine.
 
-\subsection{Métricas de Avaliação}
-A avaliação considera quatro métricas: (i) \textbf{taxa de preservação semântica}, proporção de códigos otimizados que passam em todos os testes do HumanEval; (ii) \textbf{speedup} médio aritmético, mediano e harmônico relativo à versão original; (iii) \textbf{taxa de melhoria}, fração de problemas com speedup superior a $1{,}05\times$; e (iv) \textbf{taxa de regressão}, fração de problemas com speedup inferior a $0{,}95\times$. Adicionalmente é reportada a distribuição de regras disparadas no \textit{baseline} determinístico.
+\subsection{Evaluation Metrics}
+The evaluation considers four metrics: (i) \textbf{semantic preservation rate}, the fraction of optimized codes that pass all HumanEval tests; (ii) arithmetic, median, and harmonic \textbf{mean speedup} relative to the original version; (iii) \textbf{improvement rate}, the fraction of problems with speedup above $1.05\times$; and (iv) \textbf{regression rate}, the fraction of problems with speedup below $0.95\times$. Additionally, the distribution of rules triggered by the deterministic baseline is reported.
 
-\subsection{Exemplo Ilustrativo}
-A Listagem~\ref{lst:original} apresenta um código tipicamente encontrado em \textit{datasets} de programação competitiva, e a Listagem~\ref{lst:otimizado} mostra uma transformação esperada do LLM.
+\subsection{Illustrative Example}
+Listing~\ref{lst:original} shows a code typically found in competitive-programming datasets, and Listing~\ref{lst:otimizado} shows a transformation expected from the LLM.
 
-\begin{lstlisting}[caption={Trecho original com laço explícito.}, label={lst:original}]
-def soma_quadrados(n):
+\begin{lstlisting}[caption={Original code with explicit loop.}, label={lst:original}]
+def sum_of_squares(n):
     total = 0
     for i in range(n):
         total = total + i * i
     return total
 \end{lstlisting}
 
-\begin{lstlisting}[caption={Versão otimizada sugerida pelo LLM.}, label={lst:otimizado}]
-def soma_quadrados(n):
-    # formula fechada: n*(n-1)*(2n-1)/6
+\begin{lstlisting}[caption={Optimized version suggested by the LLM.}, label={lst:otimizado}]
+def sum_of_squares(n):
+    # closed form: n*(n-1)*(2n-1)/6
     return n * (n - 1) * (2 * n - 1) // 6
 \end{lstlisting}
 
-Este tipo de transformação algorítmica dificilmente seria produzido por um compilador clássico, pois exige conhecimento semântico sobre o domínio matemático envolvido.
+This kind of algorithmic transformation would hardly be produced by a classical compiler, since it requires semantic knowledge of the underlying mathematical domain.
 
-\section{Resultados Experimentais}
+\section{Experimental Results}
 \label{sec:resultados}
 
-O pipeline descrito na Seção~\ref{sec:metodologia} foi executado sobre \textbf{todos os 164 problemas} do HumanEval utilizando o \textit{back-end} determinístico baseado em regras AST (\texttt{rule\_based}) como linha de base. Os experimentos foram conduzidos em CPython~3.11 sobre Linux, com cada \textit{workload} de \textit{benchmark} executado 200 vezes em cada uma de 5 repetições, reportando-se o tempo mínimo.
+The pipeline described in Section~\ref{sec:metodologia} was executed over \textbf{all 164 HumanEval problems} using the deterministic AST-rule back-end (\texttt{rule\_based}) as the baseline. Experiments were conducted on CPython~3.11 over Linux, with each benchmark workload executed 200 times in each of 5 repetitions, reporting the minimum time.
 
-\subsection{Métricas Agregadas}
+\subsection{Aggregate Metrics}
 
 \begin{table}[htbp]
-\caption{Resultados agregados sobre os 164 problemas do HumanEval (baseline determinístico via AST).}
+\caption{Aggregate results over the 164 HumanEval problems (deterministic AST baseline).}
 \label{tab:agregado}
 \centering
 \begin{tabular}{lr}
 \hline
-\textbf{Métrica} & \textbf{Valor} \\
+\textbf{Metric} & \textbf{Value} \\
 \hline
-Problemas avaliados & 164 \\
-Preservação semântica & 164/164 (100{,}0\%) \\
-Problemas melhorados ($>$1{,}05$\times$) & 15 \\
-Problemas neutros [0{,}95;~1{,}05] & 126 \\
-Regressões ($<$0{,}95$\times$) & 14 \\
-Imensuráveis (clock $<$ 1$\mu$s) & 9 \\
-Regras disparadas (pelo menos uma) & 8 \\
+Problems evaluated & 164 \\
+Semantic preservation & 164/164 (100.0\%) \\
+Improved problems ($>$1.05$\times$) & 15 \\
+Neutral problems [0.95;~1.05] & 126 \\
+Regressions ($<$0.95$\times$) & 14 \\
+Unmeasurable (clock $<$ 1$\mu$s) & 9 \\
+Rules triggered (at least one) & 8 \\
 \hline
-Speedup médio aritmético\textsuperscript{$\dagger$} & 5{,}927$\times$ \\
-Speedup mediano\textsuperscript{$\dagger$} & 1{,}003$\times$ \\
-Speedup médio harmônico\textsuperscript{$\dagger$} & 0{,}986$\times$ \\
-Speedup máximo\textsuperscript{$\dagger$} & 615{,}378$\times$ \\
-Speedup mínimo\textsuperscript{$\dagger$} & 0{,}361$\times$ \\
+Arithmetic mean speedup\textsuperscript{$\dagger$} & 5.927$\times$ \\
+Median speedup\textsuperscript{$\dagger$} & 1.003$\times$ \\
+Harmonic mean speedup\textsuperscript{$\dagger$} & 0.986$\times$ \\
+Maximum speedup\textsuperscript{$\dagger$} & 615.378$\times$ \\
+Minimum speedup\textsuperscript{$\dagger$} & 0.361$\times$ \\
 \hline
 \end{tabular}
 \vspace{0.1cm}
 \raggedright
-\scriptsize \textsuperscript{$\dagger$}{Estatísticas calculadas sobre os 155 problemas com tempo mensurável; os 9 problemas em que tanto o tempo original quanto o otimizado caíram abaixo da resolução do clock (1$\mu$s) são excluídos por não fornecerem razão definida.}
+\scriptsize \textsuperscript{$\dagger$}{Statistics computed over the 155 problems with measurable time; the 9 problems in which both original and optimized times fell below the clock resolution (1$\mu$s) are excluded, as they yield no well-defined ratio.}
 \end{table}
 
-A Tabela~\ref{tab:agregado} sintetiza os resultados. A \textbf{preservação semântica é total}: nenhuma das 164 transformações geradas pelo otimizador determinístico quebrou os testes do HumanEval. Contudo, a grande maioria dos problemas (126 de 164) apresenta \textit{speedup} neutro (entre 0{,}95$\times$ e 1{,}05$\times$), indicando que nenhum padrão sintático das regras implementadas foi detectado. O \textit{speedup} médio aritmético (5{,}927$\times$) é inflado por dois \textit{outliers} de memoização, enquanto o \textit{speedup} mediano (1{,}003$\times$) e a média harmônica (0{,}986$\times$) refletem mais fielmente o impacto típico.
+Table~\ref{tab:agregado} summarizes the results. \textbf{Semantic preservation is total}: none of the 164 transformations produced by the deterministic optimizer broke the HumanEval tests. However, the vast majority of problems (126 of 164) show a neutral speedup (between 0.95$\times$ and 1.05$\times$), indicating that no syntactic pattern of the implemented rules was detected. The arithmetic mean speedup (5.927$\times$) is inflated by two memoization outliers, while the median speedup (1.003$\times$) and the harmonic mean (0.986$\times$) more faithfully reflect the typical impact.
 
-\subsubsection*{Significância estatística}
-A diferença pareada $\Delta_i = t_i^\text{orig} - t_i^\text{opt}$ entre tempos original e otimizado, calculada sobre os 164 problemas, possui média $\bar{\Delta} = 0{,}173$~ms com erro padrão $\mathrm{SE} = 0{,}361$~ms, resultando em estatística $t = 0{,}479$ ($\mathrm{df} = 163$, $p \approx 0{,}63$). O teste \textit{t} pareado, portanto, \textbf{não rejeita} a hipótese nula de que o baseline determinístico não produz redução média de tempo. Adicionalmente, um intervalo de confiança \textit{bootstrap} de 95\% (5\,000 reamostragens) para o \textit{speedup} mediano resultou em [0{,}995;~1{,}007], que inclui $1{,}0$. Em conjunto, esses testes confirmam quantitativamente que, ao nível populacional do HumanEval, a otimização baseada em regras AST tem efeito médio estatisticamente \emph{indistinguível de zero}, sendo os ganhos de fato concentrados em um subconjunto pequeno e identificável de funções recursivas.
+\subsubsection*{Statistical significance}
+The paired difference $\Delta_i = t_i^\text{orig} - t_i^\text{opt}$ between original and optimized times, computed over the 164 problems, has mean $\bar{\Delta} = 0.173$~ms with standard error $\mathrm{SE} = 0.361$~ms, yielding statistic $t = 0.479$ ($\mathrm{df} = 163$, $p \approx 0.63$). The paired \textit{t}-test therefore \textbf{does not reject} the null hypothesis that the deterministic baseline produces no mean reduction in time. Additionally, a 95\% bootstrap confidence interval (5{,}000 resamples) for the median speedup yielded $[0.995;~1.007]$, which includes $1.0$. Together, these tests quantitatively confirm that at the population level of HumanEval, AST-rule-based optimization has a mean effect statistically \emph{indistinguishable from zero}; the gains are in fact concentrated in a small, identifiable subset of recursive functions.
 
 \begin{figure}[htbp]
 \centering
 \includegraphics[width=0.95\columnwidth]{experiment/results/fig_baseline_hist.pdf}
-\caption{Distribuição dos \textit{speedups} (escala $\log_{10}$) para os 155 problemas do HumanEval com tempo mensurável sob o baseline determinístico. A linha pontilhada marca \textit{speedup} = $1\times$.}
+\caption{Distribution of speedups ($\log_{10}$ scale) for the 155 HumanEval problems with measurable time under the deterministic baseline. The dashed line marks speedup = $1\times$.}
 \label{fig:hist_baseline}
 \end{figure}
 
-A Figura~\ref{fig:hist_baseline} corrobora visualmente a análise: a massa de probabilidade está concentrada em torno de zero (i.e., $1\times$), com cauda longa à esquerda (regressões) e dois outliers extremos à direita (memoização).
+Figure~\ref{fig:hist_baseline} visually corroborates the analysis: the probability mass is concentrated around zero (i.e., $1\times$), with a long left tail (regressions) and two extreme outliers on the right (memoization).
 
-\subsection{Detalhamento por Regra Aplicada}
+\subsection{Per-Rule Breakdown}
 
 \begin{table}[htbp]
-\caption{Detalhe dos problemas nos quais alguma regra do otimizador determinístico foi disparada.}
+\caption{Breakdown of problems in which some rule of the deterministic optimizer was triggered.}
 \label{tab:detalhe}
 \centering
 \footnotesize
 \begin{tabular}{lllrrr}
 \hline
-\textbf{Task} & \textbf{Função} & \textbf{Regras} & \textbf{Orig.} & \textbf{Otim.} & \textbf{Speedup} \\
+\textbf{Task} & \textbf{Function} & \textbf{Rules} & \textbf{Orig.} & \textbf{Opt.} & \textbf{Speedup} \\
  & & & \textbf{(ms)} & \textbf{(ms)} & \\
 \hline
-HumanEval/63 & fibfib & R1 & 41{,}60 & 0{,}07 & 615{,}4$\times$ \\
-HumanEval/55 & fib & R1 & 7{,}97 & 0{,}05 & 151{,}8$\times$ \\
-HumanEval/36 & fizz\_buzz & R2 & 1679{,}0 & 1660{,}7 & 1{,}01$\times$ \\
-HumanEval/161 & solve & R5 & 0{,}92 & 1{,}02 & 0{,}91$\times$ \\
-HumanEval/103 & rounded\_avg & R2 & 5{,}75 & 6{,}81 & 0{,}84$\times$ \\
-HumanEval/133 & sum\_sq. & R2 & 0{,}80 & 1{,}35 & 0{,}59$\times$ \\
-HumanEval/117 & select\_w. & R4 & 3{,}92 & 7{,}50 & 0{,}52$\times$ \\
-HumanEval/74 & total\_match & R2 & 0{,}32 & 0{,}88 & 0{,}36$\times$ \\
+HumanEval/63 & fibfib & R1 & 41.60 & 0.07 & 615.4$\times$ \\
+HumanEval/55 & fib & R1 & 7.97 & 0.05 & 151.8$\times$ \\
+HumanEval/36 & fizz\_buzz & R2 & 1679.0 & 1660.7 & 1.01$\times$ \\
+HumanEval/161 & solve & R5 & 0.92 & 1.02 & 0.91$\times$ \\
+HumanEval/103 & rounded\_avg & R2 & 5.75 & 6.81 & 0.84$\times$ \\
+HumanEval/133 & sum\_sq. & R2 & 0.80 & 1.35 & 0.59$\times$ \\
+HumanEval/117 & select\_w. & R4 & 3.92 & 7.50 & 0.52$\times$ \\
+HumanEval/74 & total\_match & R2 & 0.32 & 0.88 & 0.36$\times$ \\
 \hline
 \end{tabular}
 \vspace{0.1cm}
@@ -229,15 +251,15 @@ HumanEval/74 & total\_match & R2 & 0{,}32 & 0{,}88 & 0{,}36$\times$ \\
 \scriptsize R1 = \texttt{lru\_cache}; R2 = \texttt{sum()} builtin; R4 = \texttt{frozenset} lookup; R5 = \texttt{join}
 \end{table}
 
-A Tabela~\ref{tab:detalhe} revela um padrão dicotômico. A regra \textbf{R1} (memoização via \texttt{lru\_cache}) produz ganhos excepcionais quando aplicada a funções recursivas (Fibonacci e fibfib), transformando complexidade de $O(2^n)$ em $O(n)$ amortizado. Em contrapartida, as regras \textbf{R2}, \textbf{R4} e \textbf{R5} causam regressões em cinco de seis casos. A razão principal é o \textit{overhead} de construção de objetos intermediários: a expressão geradora criada por R2, o \texttt{frozenset} criado a cada chamada por R4 e a lista temporária criada por R5 superam o custo do laço explícito original para entradas pequenas --- as quais predominam nos testes do HumanEval.
+Table~\ref{tab:detalhe} reveals a dichotomous pattern. Rule \textbf{R1} (memoization via \texttt{lru\_cache}) yields exceptional gains when applied to recursive functions (Fibonacci and fibfib), turning $O(2^n)$ complexity into amortized $O(n)$. Conversely, rules \textbf{R2}, \textbf{R4}, and \textbf{R5} cause regressions in five out of six cases. The main reason is the overhead of constructing intermediate objects: the generator expression created by R2, the \texttt{frozenset} built on each call by R4, and the temporary list created by R5 outweigh the cost of the original explicit loop for small inputs -- which dominate in HumanEval tests.
 
 \begin{table}[htbp]
-\caption{Frequência de aplicação das regras do otimizador determinístico.}
+\caption{Frequency of application of the deterministic optimizer's rules.}
 \label{tab:regras}
 \centering
 \begin{tabular}{lr}
 \hline
-\textbf{Regra} & \textbf{Aplicações} \\
+\textbf{Rule} & \textbf{Applications} \\
 \hline
 R2 (\texttt{sum()} builtin) & 5 \\
 R1 (\texttt{lru\_cache}) & 2 \\
@@ -247,18 +269,18 @@ R4 (\texttt{frozenset} lookup) & 1 \\
 \end{tabular}
 \end{table}
 
-\subsection{Análise dos Resultados}
+\subsection{Analysis of Results}
 
-Três observações centrais emergem dos resultados empíricos:
+Three central observations emerge from the empirical results:
 
 \begin{enumerate}
-  \item \textbf{Cobertura limitada das regras simbólicas.} Apenas 8 de 164 problemas (4{,}9\%) ativam alguma regra. Isso demonstra quantitativamente que a correspondência sintática exata (``\texttt{acc = 0; for x in iter: acc += expr}'') é excessivamente rígida: variações triviais de estilo, como o uso de \texttt{enumerate} ou de variáveis auxiliares, escapam à detecção. Essa fragilidade é análoga ao limite dos otimizadores \textit{peephole} em compiladores clássicos.
-  \item \textbf{Regressões em transformações localmente corretas.} As regras R2, R4 e R5 produzem código semanticamente correto e sintaticamente idiomático, mas que é \textit{mais lento} na prática. Isso ocorre porque a decisão de otimização foi tomada sem considerar o tamanho típico da entrada --- exatamente o tipo de informação contextual que está \textit{fora} do escopo de regras simbólicas, mas \textit{dentro} do alcance de um LLM com capacidade de raciocínio sobre custo amortizado.
-  \item \textbf{Ganhos massivos via transformação algorítmica.} Os dois casos de memoização (R1) comprovam que a maior alavanca de otimização em Python não reside em micro-otimizações de \textit{bytecode}, mas em transformações de nível algorítmico. É precisamente nesse nível que LLMs demonstram maior aptidão, conforme evidenciado pela literatura recente \cite{shypula2023pie,fasterpy2025,sysllmatic2025}.
+  \item \textbf{Limited coverage of symbolic rules.} Only 8 of 164 problems (4.9\%) trigger any rule. This quantitatively shows that exact syntactic matching (``\texttt{acc = 0; for x in iter: acc += expr}'') is excessively rigid: trivial style variations, such as the use of \texttt{enumerate} or auxiliary variables, escape detection. This brittleness mirrors the limit of peephole optimizers in classical compilers.
+  \item \textbf{Regressions in locally correct transformations.} Rules R2, R4, and R5 produce semantically correct and syntactically idiomatic code that is in fact \textit{slower} in practice. This happens because the optimization decision was made without considering typical input size -- precisely the type of contextual information that is \textit{outside} the scope of symbolic rules but \textit{within} reach of an LLM capable of reasoning about amortized cost.
+  \item \textbf{Massive gains via algorithmic transformation.} The two memoization cases (R1) confirm that the largest optimization lever in Python lies not in bytecode-level micro-optimizations but in algorithmic-level transformations. It is precisely at this level that LLMs show the greatest aptitude, as evidenced by recent literature \cite{shypula2023pie,fasterpy2025,sysllmatic2025}.
 \end{enumerate}
 
-\subsection{Análise Qualitativa}
-Para tornar concretos os fenômenos discutidos, examinamos dois casos representativos extraídos da Tabela~\ref{tab:detalhe}: \textbf{HumanEval/55} (\texttt{fib}), em que a regra R1 produz o segundo maior ganho do experimento ($151{,}8\times$), e \textbf{HumanEval/74} (\texttt{total\_match}), em que a regra R2 produz a pior regressão observada ($0{,}36\times$).
+\subsection{Qualitative Analysis}
+To concretize the discussed phenomena, we examine two representative cases drawn from Table~\ref{tab:detalhe}: \textbf{HumanEval/55} (\texttt{fib}), where rule R1 produces the second largest gain of the experiment ($151.8\times$), and \textbf{HumanEval/74} (\texttt{total\_match}), where rule R2 produces the worst observed regression ($0.36\times$).
 
 \begin{lstlisting}[caption={Original \texttt{fib} (HumanEval/55).}, label={lst:fib_orig}]
 def fib(n: int):
@@ -267,7 +289,7 @@ def fib(n: int):
     return fib(n-1) + fib(n-2)
 \end{lstlisting}
 
-\begin{lstlisting}[caption={Versão R1 (\texttt{lru\_cache}) --- $O(n)$ amortizado.}, label={lst:fib_r1}]
+\begin{lstlisting}[caption={R1 version (\texttt{lru\_cache}) --- amortized $O(n)$.}, label={lst:fib_r1}]
 from functools import lru_cache
 
 @lru_cache(maxsize=None)
@@ -277,7 +299,7 @@ def fib(n: int):
     return fib(n-1) + fib(n-2)
 \end{lstlisting}
 
-A transformação no caso da Listagem~\ref{lst:fib_r1} acrescenta um único decorator e reduz a complexidade observável de $O(2^n)$ para $O(n)$ por chamada amortizada, gerando \textit{speedup} medido de $151{,}8\times$. É o tipo de transformação \emph{algorítmica} que um compilador clássico não realiza, pois exige reconhecer que a função é uma recorrência pura sobre inteiros pequenos.
+The transformation in Listing~\ref{lst:fib_r1} adds a single decorator and reduces the observable complexity from $O(2^n)$ to amortized $O(n)$ per call, yielding a measured speedup of $151.8\times$. This is the kind of \emph{algorithmic} transformation a classical compiler does not perform, since it requires recognizing the function as a pure recurrence over small integers.
 
 \begin{lstlisting}[caption={Original \texttt{total\_match} (HumanEval/74).}, label={lst:tm_orig}]
 def total_match(lst1, lst2):
@@ -291,7 +313,7 @@ def total_match(lst1, lst2):
     else: return lst2
 \end{lstlisting}
 
-\begin{lstlisting}[caption={Versão R2 (\texttt{sum()}) --- regressão $0{,}36\times$.}, label={lst:tm_r2}]
+\begin{lstlisting}[caption={R2 version (\texttt{sum()}) --- regression $0.36\times$.}, label={lst:tm_r2}]
 def total_match(lst1, lst2):
     l1 = sum(len(st) for st in lst1)
     l2 = sum(len(st) for st in lst2)
@@ -299,116 +321,136 @@ def total_match(lst1, lst2):
     else: return lst2
 \end{lstlisting}
 
-A versão da Listagem~\ref{lst:tm_r2} é \emph{idiomática} em Python e seria considerada superior em uma revisão de código. No entanto, em \textit{benchmarks} com listas pequenas (entradas típicas do HumanEval contêm de 0 a 5 \textit{strings}) o custo de criar e iterar a expressão geradora supera o ganho da implementação \texttt{sum()} em C, resultando em desempenho 2{,}77 vezes pior. Esse é o exemplo paradigmático de transformação em que a \emph{decisão} requer informação de contexto (tamanho típico da entrada, frequência de chamada) que está fora do alcance do casamento sintático --- e dentro do alcance de um modelo de linguagem com capacidade de raciocinar sobre custo amortizado.
+The version in Listing~\ref{lst:tm_r2} is \emph{idiomatic} in Python and would be considered superior in a code review. However, in benchmarks with small lists (typical HumanEval inputs contain 0 to 5 strings) the cost of creating and iterating over the generator expression exceeds the gain of the C-implemented \texttt{sum()}, resulting in performance 2.77 times worse. This is the paradigmatic example of a transformation whose \emph{decision} requires contextual information (typical input size, call frequency) that is outside the reach of syntactic matching -- and within reach of a language model capable of reasoning about amortized cost.
 
-\subsection{Comparação Baseline vs. Gemini}
+\subsection{Multi-Model Comparison: Baseline vs.\ Three LLMs}
 \label{sec:llmvsbase}
 
-Para validar empiricamente a hipótese central do artigo --- de que LLMs ampliam a fronteira de otimização em relação a abordagens simbólicas ---, executamos o mesmo pipeline sobre os 164 problemas do HumanEval substituindo o módulo de transformação pelo \textit{back-end} \texttt{gemini} (modelo \textbf{Gemini 2.5 Flash Lite}, \textit{temperature} = $0{,}2$, \textit{max\_output\_tokens} = 2048), preservando todas as demais etapas (validação por testes, \textit{benchmark} com 5 repetições $\times$ 200 \textit{workloads}). A Tabela~\ref{tab:llm_vs_base} apresenta a comparação direta.
+To empirically validate the central hypothesis of the paper -- and to separate the effect of the paradigm (LLM in general) from the effect of the specific model -- we ran the same pipeline over the 164 HumanEval problems, replacing the transformation module with three LLM back-ends from distinct providers and families: \textbf{Gemini 2.5 Flash Lite} (Google, REST API), \textbf{Llama 3.3 70B} (Meta open-weight, served via Groq), and \textbf{GPT-4o-mini} (OpenAI, served via GitHub Models). All were configured with temperature = $0.2$ and max\_output\_tokens = 2048, using the same structured prompt, while preserving the test validation and benchmark stages (5 repetitions $\times$ 200 workloads). Table~\ref{tab:llm_vs_base} presents the direct comparison among the four back-ends.
 
-\begin{table}[htbp]
-\caption{Comparação direta sobre os 164 problemas do HumanEval: baseline determinístico (regras AST) vs. Gemini 2.5 Flash Lite.}
+\begin{table*}[htbp]
+\caption{Paired comparison over the 164 HumanEval problems: deterministic baseline vs.\ three LLMs from distinct families.}
 \label{tab:llm_vs_base}
 \centering
 \footnotesize
-\begin{tabular}{lrr}
+\begin{tabular}{lrrrr}
 \hline
-\textbf{Métrica} & \textbf{Baseline AST} & \textbf{Gemini 2.5 FL} \\
+\textbf{Metric} & \textbf{Baseline AST} & \textbf{Gemini 2.5 FL} & \textbf{Llama 3.3 70B} & \textbf{GPT-4o-mini} \\
 \hline
-Preservação semântica & \textbf{164/164 (100{,}0\%)} & 154/164 (93{,}9\%) \\
-Inválidos (asserções) & 0 & 10 \\
-Melhorias ($>$1{,}05$\times$) & 15 & \textbf{89} \\
-Neutros [0{,}95;~1{,}05] & 126 & 12 \\
-Regressões ($<$0{,}95$\times$) & 14 & 44 \\
-Imensuráveis & 9 & 9 \\
+Provider & --- & Google & Groq (Meta) & GitHub Models (OpenAI) \\
+Semantic preservation & \textbf{164/164 (100.0\%)} & 154/164 (93.9\%) & 126/164 (76.8\%) & 135/164 (82.3\%) \\
+Invalid (hallucinations) & \textbf{0} & 10 & 38 & 29 \\
+Improvements ($>$1.05$\times$) & 15 & \textbf{89} & 45 & 61 \\
+Neutral [0.95;~1.05] & 126 & 12 & 22 & 18 \\
+Regressions ($<$0.95$\times$) & 14 & 44 & 50 & 48 \\
+Unmeasurable & 9 & 9 & 9 & 8 \\
 \hline
-Speedup mediano\textsuperscript{$\dagger$} & 1{,}003$\times$ & \textbf{1{,}138$\times$} \\
-IC 95\% (\textit{bootstrap})\textsuperscript{$\dagger$} & [0{,}997;~1{,}008] & \textbf{[1{,}071;~1{,}220]} \\
-Speedup médio aritm.\textsuperscript{$\dagger$} & 5{,}927$\times$ & \textbf{7{,}109$\times$} \\
-Speedup harmônico\textsuperscript{$\dagger$} & 0{,}986$\times$ & \textbf{1{,}064$\times$} \\
-Speedup máximo\textsuperscript{$\dagger$} & 615{,}4$\times$ & 299{,}3$\times$ \\
+Median speedup\textsuperscript{$\dagger$} & 1.003$\times$ & \textbf{1.138$\times$} & 0.976$\times$ & 1.018$\times$ \\
+95\% CI (bootstrap)\textsuperscript{$\dagger$} & [0.997;~1.008] & \textbf{[1.071;~1.220]} & [0.949;~1.015] & [0.978;~1.133] \\
+Significance (sp $\ne 1$) & no & \textbf{yes} & no & no \\
+Arithmetic mean speedup\textsuperscript{$\dagger$} & 5.927$\times$ & \textbf{7.109$\times$} & 4.044$\times$ & 4.266$\times$ \\
+Harmonic mean speedup\textsuperscript{$\dagger$} & 0.986$\times$ & \textbf{1.064$\times$} & 0.859$\times$ & 0.956$\times$ \\
+Maximum speedup\textsuperscript{$\dagger$} & 615.4$\times$ & 299.3$\times$ & 122.7$\times$ & 133.5$\times$ \\
 \hline
-Cobertura de melhoria & 9{,}1\% & \textbf{54{,}3\%} \\
-Razão melhorias/regressões & 1{,}07 & \textbf{2{,}02} \\
+Improvement coverage & 9.1\% & \textbf{54.3\%} & 27.4\% & 37.2\% \\
+Improvements/regressions ratio & 1.07 & \textbf{2.02} & 0.90 & 1.27 \\
 \hline
 \end{tabular}
 \vspace{0.1cm}
 \raggedright
-\scriptsize \textsuperscript{$\dagger$}{Estatísticas computadas sobre os problemas com tempo mensurável (sp $>$ 0): 155 no baseline, 145 no Gemini (154 válidos $-$ 9 imensuráveis).}
-\end{table}
+\scriptsize \textsuperscript{$\dagger$}{Statistics computed over problems with measurable time and semantically valid code (sp $>$ 0).}
+\end{table*}
 
-A Tabela~\ref{tab:llm_vs_base} permite seis observações empíricas:
+Table~\ref{tab:llm_vs_base} reveals a more sophisticated pattern than the initial hypothesis would suggest. Five empirical observations stand out:
 
 \begin{enumerate}
-  \item \textbf{Cobertura $\sim 6\times$ maior.} O Gemini melhora 89 dos 164 problemas (54{,}3\%), contra 15 (9{,}1\%) do baseline simbólico. Isso confirma quantitativamente a tese de que o LLM remove a barreira de \textit{pattern matching} sintático: variações triviais que escapam às regras (uso de \texttt{enumerate}, variáveis auxiliares, estilo funcional) são tratadas pelo LLM com a mesma fluência que o padrão canônico.
-  \item \textbf{Significância estatística do ganho mediano.} O intervalo de confiança 95\% \textit{bootstrap} para o \textit{speedup} mediano do Gemini é $[1{,}071;~1{,}220]$ --- \textbf{não inclui $1{,}0$}. O baseline, em contrapartida, tem IC $[0{,}997;~1{,}008]$, que inclui $1{,}0$. Em outras palavras, ao nível populacional do HumanEval, \emph{somente o LLM produz ganho mediano estatisticamente significativo}.
-  \item \textbf{Custo da generalização: alucinações.} O Gemini falhou em preservar semântica em 10 de 164 problemas (6{,}1\%). Em todos os 10 casos a falha se manifesta como assertiva quebrada nos testes oficiais --- o código compilou e rodou, mas produziu saídas erradas. O baseline determinístico tem 0 falhas. Esse é o \emph{trade-off fundamental} da aproximação probabilística: amplitude vs. garantia.
-  \item \textbf{Regressões mais frequentes.} O LLM produz 44 regressões contra 14 do baseline. Em valor absoluto, a magnitude das regressões é comparável à do baseline; o aumento decorre do espectro mais amplo de transformações tentadas (entradas pequenas penalizando estruturas mais idiomáticas).
-  \item \textbf{Especialização algorítmica reaproveitada.} Os três maiores ganhos do Gemini --- $largest\_prime\_factor$ ($299{,}3\times$, peneira), $fib$ ($157{,}2\times$, memoização) e $fibfib$ ($125{,}3\times$, memoização) --- replicam ou superam os ganhos do baseline em padrões algorítmicos clássicos, indicando que o LLM dispõe das mesmas alavancas de alta magnitude e de várias outras (e.g., \texttt{pow(a,b,m)} em $modp$ com $30{,}97\times$, fórmula fechada em $rounded\_avg$ com $22{,}6\times$).
-  \item \textbf{Razão melhorias/regressões.} Por cada regressão, o Gemini gera duas melhorias ($89/44 \approx 2{,}02$); o baseline produz aproximadamente uma para uma ($15/14 \approx 1{,}07$). Em um cenário de uso assistido pelo desenvolvedor (com aceitação manual), o Gemini oferece melhor relação sinal-ruído.
+  \item \textbf{Significant heterogeneity across LLMs.} The three models differ dramatically: improvement coverage ranges from $27.4\%$ (Llama) to $54.3\%$ (Gemini), and the hallucination rate ranges from $6.1\%$ (Gemini) to $23.2\%$ (Llama). This refutes a naive reading of the paradigm ``\textit{LLMs beat the baseline}'': the effect is strongly model-dependent.
+
+  \item \textbf{Statistical significance is exclusive to Gemini.} The 95\% bootstrap CI for the median speedup \emph{excludes} $1.0$ only for Gemini ($[1.071;~1.220]$). Llama 70B has CI $[0.949;~1.015]$ (includes $1.0$) and GPT-4o-mini has $[0.978;~1.133]$ (includes $1.0$). In other words, at the population level of HumanEval, \emph{only one of the three LLMs} produces a median gain statistically distinguishable from zero.
+
+  \item \textbf{Hierarchy of hallucinations.} Llama 3.3 70B fails on 38/164 problems ($23.2\%$), nearly $4\times$ the Gemini rate ($6.1\%$); GPT-4o-mini sits in an intermediate position ($17.7\%$). In every case the failure is detected by the official tests as a broken assertion -- confirming that the validation module is not optional: without it, the user would receive $17{-}23\%$ of semantically incorrect code in production.
+
+  \item \textbf{Llama 70B is the only configuration where the LLM regresses the median.} Despite having more parameters than Gemini Flash Lite, Llama has an improvements/regressions ratio of $0.90 < 1$ and a median of $0.976 < 1$. The $50$ regressions outnumber the $45$ improvements; model size does not compensate for the relatively poor calibration to the specific code-transformation task.
+
+  \item \textbf{Guarantees preserved in algorithmic transformations.} Even in the weakest LLMs, extreme gains were obtained on problems with classical algorithmic solutions: Llama reaches $122.7\times$ on $fib$ (memoization), and GPT-4o-mini reaches $133.5\times$ on $largest\_prime\_factor$ (sieve). This indicates that \emph{all} LLMs know the algorithmic levers; the difference lies in how often they apply them correctly and how well they preserve semantics in the remaining cases.
 \end{enumerate}
 
 \begin{figure}[htbp]
 \centering
-\includegraphics[width=0.95\columnwidth]{experiment/results/fig_gemini_hist.pdf}
-\caption{Distribuição dos \textit{speedups} (escala $\log_{10}$) sob o Gemini 2.5 Flash Lite. A massa de probabilidade está deslocada para a direita em relação ao baseline (Figura~\ref{fig:hist_baseline}), com pico em torno de $1{,}1$--$1{,}3\times$ e cauda longa de melhorias.}
-\label{fig:hist_gemini}
+\includegraphics[width=0.98\columnwidth]{experiment/results/fig_comparison_hist.pdf}
+\caption{Distribution of speedups ($\log_{10}$ scale) for the four back-ends. The baseline (gray) concentrates at zero (no effect). Gemini (blue) is clearly shifted to the right. Llama (orange) and GPT-4o-mini (green) occupy intermediate positions with modes close to or slightly below zero.}
+\label{fig:hist_comparison}
 \end{figure}
 
-A Figura~\ref{fig:hist_gemini} torna visualmente saliente a diferença distribucional: enquanto o histograma do baseline (Figura~\ref{fig:hist_baseline}) é centrado em $0$ ($\log_{10} 1 = 0$), o do Gemini está claramente deslocado para a direita, com massa concentrada em $\log_{10} \in [0{,}05;~0{,}3]$, refletindo o ganho mediano significativo.
+Figure~\ref{fig:hist_comparison} visually emphasizes this heterogeneity: while the probability mass of Gemini sits in $\log_{10} \in [0.05;~0.3]$ (shifted right), Llama and GPT-4o-mini have distributions with modes close to zero and heavy tails on both the left (regressions) and the right (algorithmic gains), reflecting the more erratic behavior observed in their aggregate metrics.
 
-\section{Discussão: Limites e Possibilidades}
+\subsubsection*{Implication for the central thesis}
+The joint reading of Table~\ref{tab:llm_vs_base} and Figure~\ref{fig:hist_comparison} supports a more precise version of the initial hypothesis: \emph{LLMs expand the optimization frontier relative to the symbolic baseline, but the effective gain is highly dependent on the chosen model}. In a production pipeline, this means that LLM selection must be treated as an engineering decision empirically validated on the target domain -- not as a neutral technical choice. The mandatory presence of the test-based validation module is the mechanism that makes this risk acceptable: it turns silent hallucinations into detected failures, keeping effective semantic preservation close to $100\%$ at the cost of discarding between $6\%$ and $23\%$ of the LLM's outputs.
+
+\section{Discussion: Limits and Possibilities}
 \label{sec:discussao}
 
-\subsection{Limites}
-Os resultados experimentais, aliados à revisão da literatura, permitem delinear os seguintes limites:
+\subsection{Limits}
+The experimental results, together with the literature review, allow us to outline the following limits:
 
 \begin{itemize}
-  \item \textbf{Ausência de garantias formais.} Nem o otimizador determinístico, nem um LLM oferecem provas de equivalência semântica. A corretude depende inteiramente da qualidade da suíte de testes. No experimento, os 164 testes do HumanEval mostraram-se suficientes para o \textit{baseline}, mas cenários reais com cobertura parcial podem não detectar regressões semânticas sutis.
-  \item \textbf{Fragilidade simbólica.} Com apenas 4{,}9\% de cobertura, o otimizador determinístico evidencia que transformações por correspondência de padrão são inerentemente limitadas em linguagens dinâmicas, onde variações de estilo, de \textit{framework} e de versão da linguagem multiplicam os padrões possíveis.
-  \item \textbf{Sensibilidade ao tamanho da entrada.} Transformações ``benéficas'' podem regredir quando o custo de construção de objetos intermediários domina o tempo de execução para entradas pequenas, como observado em 5 dos 8 casos onde regras foram aplicadas.
-  \item \textbf{Alucinações de LLMs.} Modelos de linguagem podem gerar código sintaticamente válido porém semanticamente incorreto. No experimento conduzido (Tabela~\ref{tab:llm_vs_base}), o Gemini 2.5 Flash Lite produziu 10 saídas inválidas em 164 problemas (6{,}1\%), todas detectadas pela suíte de testes do HumanEval. Esse percentual reforça quantitativamente a necessidade de um módulo de validação robusto no pipeline, sem o qual o uso direto de um LLM como otimizador é \emph{inseguro}.
-  \item \textbf{Dinamismo intrínseco do Python.} Mecanismos como \textit{late binding}, \textit{monkey patching}, \texttt{eval}/\texttt{exec} e o GIL permanecem como barreiras fundamentais a otimizações estáticas agressivas, sejam simbólicas ou baseadas em LLM.
+  \item \textbf{Absence of formal guarantees.} Neither the deterministic optimizer nor an LLM provides proofs of semantic equivalence. Correctness depends entirely on the quality of the test suite. In the experiment, the 164 HumanEval tests proved sufficient for the baseline, but real-world scenarios with partial coverage may fail to detect subtle semantic regressions.
+  \item \textbf{Symbolic brittleness.} With only 4.9\% coverage, the deterministic optimizer shows that pattern-matching transformations are inherently limited in dynamic languages, where style, framework, and language-version variations multiply the possible patterns.
+  \item \textbf{Sensitivity to input size.} ``Beneficial'' transformations may regress when the cost of constructing intermediate objects dominates execution time for small inputs, as observed in 5 of the 8 cases where rules were applied.
+  \item \textbf{LLM hallucinations.} Language models can produce syntactically valid yet semantically incorrect code. In the experiment (Table~\ref{tab:llm_vs_base}), the observed rate ranges from $6.1\%$ (Gemini 2.5 Flash Lite, 10 failures) to $23.2\%$ (Llama 3.3 70B, 38 failures), with GPT-4o-mini in an intermediate position ($17.7\%$, 29 failures). All failures manifested as broken assertions in the official tests. This range quantitatively reinforces that (a) the test-based validation module is \emph{mandatory}, not optional, and (b) the choice of LLM has a direct impact on the resulting discard rate.
+  \item \textbf{Python's intrinsic dynamism.} Mechanisms such as late binding, monkey patching, \texttt{eval}/\texttt{exec}, and the GIL remain fundamental barriers to aggressive static optimizations, whether symbolic or LLM-based.
 \end{itemize}
 
-\subsection{Possibilidades}
-Em contrapartida, os resultados e a literatura apontam possibilidades concretas:
+\subsection{Possibilities}
+On the other hand, both the results and the literature point to concrete possibilities:
 
 \begin{itemize}
-  \item \textbf{Transformações algorítmicas de alto nível.} Os \textit{speedups} de 151{,}8$\times$ e 615{,}4$\times$ obtidos com memoização confirmam que o maior potencial de otimização em Python reside em transformações que um compilador clássico não pode inferir. LLMs, treinados em bilhões de \textit{tokens} de código, possuem capacidade de reconhecer padrões algorítmicos e propor reformulações equivalentes \cite{cummins2024metacompiler,fasterpy2025}.
-  \item \textbf{Raciocínio contextual.} Diferente de uma regra simbólica, um LLM pode levar em conta o tamanho esperado da entrada, o perfil de uso da função e restrições de domínio presentes na \textit{docstring}, potencialmente evitando as regressões observadas nas regras R2, R4 e R5.
-  \item \textbf{Arquitetura híbrida.} A combinação de análise estática via AST (para extrair \textit{features} e filtrar candidatos) com inferência por LLM (para decidir \textit{se} e \textit{como} otimizar) cria um pipeline que recupera parte do rigor de um compilador sem perder a flexibilidade de um modelo probabilístico.
-  \item \textbf{Feedback do runtime.} Informações de \textit{profiling} (\texttt{cProfile}), inspeção de \textit{bytecode} (\texttt{dis}) e dados do interpretador adaptativo do CPython 3.11+ podem enriquecer o \textit{prompt} do LLM, conforme já demonstrado pelo CompilerGPT \cite{compilergpt2025}.
-  \item \textbf{Reprodutibilidade com custo zero.} A existência de \textit{foundation models} com \textit{tier} gratuito (Gemini 2.5 Flash Lite, Llama 3.3 via Groq) viabiliza a execução do pipeline proposto em contexto acadêmico sem custo, conforme demonstrado neste trabalho.
+  \item \textbf{High-level algorithmic transformations.} The 151.8$\times$ and 615.4$\times$ speedups obtained with memoization confirm that the largest optimization potential in Python lies in transformations a classical compiler cannot infer. LLMs, trained on billions of tokens of code, can recognize algorithmic patterns and propose equivalent reformulations \cite{cummins2024metacompiler,fasterpy2025}.
+  \item \textbf{Contextual reasoning.} Unlike a symbolic rule, an LLM can take into account expected input size, the function's usage profile, and domain constraints present in the docstring, potentially avoiding the regressions observed for rules R2, R4, and R5.
+  \item \textbf{Hybrid architecture.} Combining AST-based static analysis (to extract features and filter candidates) with LLM inference (to decide \textit{whether} and \textit{how} to optimize) yields a pipeline that recovers part of a compiler's rigor without losing the flexibility of a probabilistic model.
+  \item \textbf{Runtime feedback.} Profiling information (\texttt{cProfile}), bytecode inspection (\texttt{dis}), and data from CPython 3.11+'s adaptive interpreter can enrich the LLM's prompt, as already demonstrated by CompilerGPT \cite{compilergpt2025}.
+  \item \textbf{Reproducibility at zero cost.} The existence of foundation models with free tiers (Gemini 2.5 Flash Lite, Llama 3.3 via Groq) makes it feasible to run the proposed pipeline in academic settings at no cost, as demonstrated in this work.
 \end{itemize}
 
-\section{Ameaças à Validade}
+\section{Threats to Validity}
 \label{sec:ameacas}
 
-Seguindo a taxonomia clássica de pesquisa empírica em engenharia de software, identificam-se as seguintes ameaças aos resultados reportados.
+Following the classical taxonomy of empirical software engineering research, we identify the following threats to the reported results.
 
-\paragraph{Validade interna} O \textit{benchmark} de tempo de execução é sensível ao ruído do sistema operacional, à variação de \textit{caches} e ao próprio interpretador. Mitigamos esse risco executando 200 repetições do \textit{workload} em cada uma de 5 rodadas e reportando o tempo mínimo, padrão adotado na biblioteca \texttt{timeit}. Ainda assim, \textit{speedups} próximos de $1{,}0\times$ não podem ser interpretados isoladamente e foram, por isso, agrupados na categoria ``neutros''.
+\paragraph{Internal validity} Execution-time benchmarks are sensitive to OS noise, cache variation, and the interpreter itself. We mitigate this risk by running 200 workload repetitions in each of 5 rounds and reporting the minimum time, following the \texttt{timeit} library convention. Even so, speedups close to $1.0\times$ cannot be interpreted in isolation and were therefore grouped under the ``neutral'' category.
 
-\paragraph{Validade de construto} A preservação semântica é aferida pela suíte de testes do HumanEval. Embora a cobertura desses testes seja propositalmente alta para o problema-alvo, equivalência semântica plena requer prova formal, fora do escopo deste trabalho. Transformações localmente corretas mas que dependem de invariantes não testados podem passar despercebidas.
+\paragraph{Construct validity} Semantic preservation is assessed by the HumanEval test suite. Although these tests are deliberately high-coverage for the target problem, full semantic equivalence requires formal proof, beyond the scope of this work. Locally correct transformations that rely on untested invariants may go undetected.
 
-\paragraph{Validade externa} O HumanEval é composto por 164 funções pequenas e autocontidas, com entradas tipicamente reduzidas. Esse perfil favorece micro-benchmarks e penaliza transformações que amortizam custo em entradas grandes (como observado em R2, R4 e R5). A generalização dos achados para código de produção, com classes, dependências externas e \textit{datasets} reais, requer validação adicional sobre repositórios maiores e mais diversos --- lacuna parcialmente endereçada por trabalhos como o DocAgent \cite{yang2025docagent}, que avaliam sistemas baseados em LLM diretamente sobre repositórios reais do GitHub.
+\paragraph{External validity} HumanEval consists of 164 small, self-contained functions with typically small inputs. This profile favors micro-benchmarks and penalizes transformations that amortize cost over large inputs (as observed in R2, R4, and R5). Generalizing the findings to production code, with classes, external dependencies, and real datasets, requires additional validation on larger and more diverse repositories -- a gap partially addressed by works such as DocAgent \cite{yang2025docagent}, which evaluate LLM-based systems directly on real GitHub repositories.
 
-\paragraph{Variabilidade do modelo} LLMs são intrinsecamente estocásticos e suas respostas variam com o \textit{prompt}, com o parâmetro de \textit{temperature} e com versões internas do modelo. Os experimentos reportados utilizam \textit{temperature} = $0{,}2$ e o \textit{back-end} determinístico baseado em regras AST como linha de base controlada; resultados específicos do Gemini 2.5 Flash Lite devem ser reproduzidos com seed fixa e versão de modelo congelada antes de qualquer comparação cruzada.
+\paragraph{Model variability} LLMs are inherently stochastic, and their responses vary with the prompt, the temperature parameter, and the model's internal versions. The reported experiments use temperature = $0.2$ and the deterministic AST-rule back-end as a controlled baseline; results specific to Gemini 2.5 Flash Lite should be reproduced with a fixed seed and a frozen model version before any cross-comparison.
 
-\paragraph{Dataset limitado} O uso exclusivo do HumanEval como universo experimental é uma escolha deliberada por reprodutibilidade, mas restringe a diversidade de domínios. \textit{Datasets} complementares como PIE \cite{shypula2023pie} e Project CodeNet \cite{puri2021codenet} são candidatos naturais para mitigar essa ameaça em trabalhos futuros.
+\paragraph{Limited dataset} The sole use of HumanEval as the experimental universe is a deliberate choice for reproducibility, but it restricts domain diversity. Complementary datasets such as PIE \cite{shypula2023pie} and Project CodeNet \cite{puri2021codenet} are natural candidates to mitigate this threat in future work.
 
-\section{Considerações Finais}
+\section{Conclusions}
 \label{sec:conclusao}
 
-Este artigo investigou os limites e possibilidades do uso de modelos de linguagem na otimização de código Python, com foco no papel de LLMs como componente auxiliar à cadeia de compilação de uma linguagem dinâmica. Foi proposta e implementada uma arquitetura modular (Ingestão $\rightarrow$ Análise Estática via AST $\rightarrow$ Otimização $\rightarrow$ Validação $\rightarrow$ \textit{Benchmark}) operando sobre o dataset público HumanEval (164 problemas).
+This paper investigated the limits and possibilities of using language models for Python code optimization, focusing on the role of LLMs as an auxiliary component in the compilation toolchain of a dynamic language. We proposed and implemented a modular architecture (Ingestion $\rightarrow$ AST-based Static Analysis $\rightarrow$ Optimization $\rightarrow$ Validation $\rightarrow$ Benchmark) operating on the public HumanEval dataset (164 problems).
 
-Os resultados empíricos da execução pareada sobre os 164 problemas do HumanEval, comparando o otimizador determinístico baseado em regras AST e o \textit{foundation model} Gemini 2.5 Flash Lite, evidenciaram que: (i) a preservação semântica é alcançável com 100\% de sucesso pelo baseline determinístico, mas cai para 93{,}9\% sob o LLM (10 alucinações detectadas pelos testes); (ii) a cobertura de melhoria do baseline é severamente limitada (9{,}1\%), enquanto o LLM melhora 54{,}3\% dos problemas, uma ampliação de aproximadamente $6\times$; (iii) somente o LLM produz \textit{speedup} mediano estatisticamente significativo (IC 95\% \textit{bootstrap} $[1{,}071;~1{,}220]$); o baseline tem mediana indistinguível de $1{,}0$ ($[0{,}997;~1{,}008]$); (iv) ganhos massivos por transformação algorítmica (memoização, pelos próprios mecanismos da \textit{stdlib} como \texttt{pow(a,b,m)}, peneira de primos) são reproduzidos pelo LLM em magnitude comparável ao baseline; e (v) cada regressão do LLM é compensada por aproximadamente duas melhorias, contra uma para uma do baseline.
+The empirical results from the paired execution over the 164 HumanEval problems, comparing the deterministic AST-rule optimizer and three LLMs from distinct families (Gemini 2.5 Flash Lite, Llama 3.3 70B via Groq, and GPT-4o-mini via GitHub Models), revealed five main findings:
 
-Esses resultados confirmam quantitativamente a tese central: abordagens simbólicas são necessárias, porém insuficientes, para otimizar código Python em cenários reais; LLMs ampliam a fronteira de otimização ao custo de garantia formal --- mas esse custo é quantificável (6{,}1\% no experimento) e mitigável por validação automática via testes. A integração de LLMs como componente de raciocínio de alto nível em um pipeline com validação semântica constitui, portanto, não apenas uma direção promissora, mas uma direção empiricamente validada para contornar os limites impostos pelo dinamismo da linguagem.
+\begin{enumerate}
+\item \textbf{Formal guarantee vs.\ coverage is a real, measurable trade-off.} The baseline preserves semantics in $100\%$ of cases but improves only $9.1\%$ of problems; the LLMs preserve between $76.8\%$ and $93.9\%$ and improve between $27.4\%$ and $54.3\%$.
 
-Como trabalhos futuros, pretende-se: (i) integrar \textit{Retrieval-Augmented Generation} (RAG) com o dataset PIE \cite{shypula2023pie} como fonte de exemplos de \textit{few-shot}, com expectativa de reduzir a taxa de alucinação observada; (ii) incorporar \textit{feedback} de \textit{bytecode} do CPython 3.11+ e relatórios de \textit{profiling} como contexto adicional ao \textit{prompt} do LLM, conforme já demonstrado pelo CompilerGPT \cite{compilergpt2025}; (iii) avaliar a generalização da arquitetura para outros \textit{datasets} (Project CodeNet Python800, MBPP) e outros \textit{foundation models} (Llama 3.3, DeepSeek-Coder, StarCoder2) sob o mesmo protocolo de comparação pareada; (iv) implementar um \textit{loop} de \textit{self-refine} em que falhas de validação retornam ao LLM como contexto para uma nova tentativa, visando recuperar parte dos 6{,}1\% de alucinações; e (v) explorar uma arquitetura multi-agente inspirada no DocAgent \cite{yang2025docagent}, na qual agentes especializados em análise, transformação e verificação cooperam por meio de um \textit{orchestrator}, com travessia dependência-consciente sobre o grafo de chamadas do programa.
+\item \textbf{Heterogeneity across LLMs is high and \emph{matters}.} Improvement coverage varies $2\times$ across the three LLMs ($27.4\%$ Llama vs.\ $54.3\%$ Gemini), and the hallucination rate varies $4\times$ ($6.1\%$ Gemini vs.\ $23.2\%$ Llama). The choice of model is not neutral.
 
-\paragraph{Contribuições esperadas} Em síntese, o presente trabalho contribui com: (1) uma avaliação crítica e reprodutível do uso de IA generativa para otimização de código em uma linguagem dinâmica; (2) a identificação quantitativa dos limites reais de abordagens simbólicas baseadas em padrão sobre AST (cobertura de apenas 4{,}9\% no HumanEval); e (3) diretrizes para o uso seguro de LLMs em pipelines de otimização --- notadamente, a obrigatoriedade de validação semântica por testes, o uso de análise estática como filtro prévio e a adoção de uma malha de verificação inspirada em sistemas como o DocAgent \cite{yang2025docagent}.
+\item \textbf{Only one of the three LLMs produces a statistically significant median gain.} The 95\% bootstrap CI for the median speedup excludes $1.0$ only for Gemini ($[1.071;~1.220]$); Llama and GPT-4o-mini have CIs that cross $1.0$, with Llama in fact below it ($0.976$).
+
+\item \textbf{Extreme algorithmic gains are achievable by every LLM.} Memoization, closed-form formulas, \texttt{pow(a,b,m)}, and prime sieves were rediscovered by all models with speedups between $100\times$ and $300\times$. The difference lies in the frequency of correct application, not in the pointwise capability.
+
+\item \textbf{Test-based validation is an effective containment mechanism.} Across all LLMs, $100\%$ of hallucinations were caught by the official HumanEval suite. Without the validation module, the user would receive between $6\%$ and $23\%$ of semantically incorrect code.
+\end{enumerate}
+
+These results refute the simplistic thesis that ``LLMs beat the baseline'' and establish a more precise and useful one: \emph{symbolic approaches are necessary but insufficient; LLMs expand the optimization frontier at the cost of formal guarantees; and the magnitude of this gain depends strongly on the chosen model}. Integrating LLMs as a high-level reasoning component in a pipeline with mandatory semantic validation and model selection empirically validated on the target domain therefore constitutes an empirically validated direction for overcoming the limits imposed by language dynamism.
+
+As future work, we plan to: (i) integrate Retrieval-Augmented Generation (RAG) with the PIE dataset \cite{shypula2023pie} as a source of few-shot examples, with the expectation of reducing the high hallucination rate observed in the weaker LLMs (up to $23.2\%$ in Llama 70B); (ii) incorporate CPython 3.11+ bytecode feedback and profiling reports as additional prompt context, as already demonstrated by CompilerGPT \cite{compilergpt2025}; (iii) evaluate generalization to other, more complex datasets (Project CodeNet Python800, MBPP, real GitHub repositories) and to code-specialized LLMs (DeepSeek-Coder, StarCoder2, Code Llama) under the same paired-comparison protocol; (iv) implement a self-refine loop in which validation failures are returned to the LLM as context for a new attempt, aiming to recover part of the hallucinations; (v) investigate \textbf{why} heterogeneity across LLMs is so large -- particularly, whether the gap between Gemini ($6.1\%$ hallucination) and Llama 70B ($23.2\%$) stems from model size, training data, alignment techniques, or prompt tuning; and (vi) explore a multi-agent architecture inspired by DocAgent \cite{yang2025docagent}, in which agents specialized in analysis, transformation, and verification cooperate through an orchestrator, with dependency-aware traversal of the program's call graph.
+
+\paragraph{Expected contributions} In summary, this work contributes: (1) a critical, reproducible, and \emph{multi-model} evaluation of the use of generative AI for code optimization in a dynamic language, comparing three LLMs from distinct providers and families; (2) the quantitative identification of the real limits of symbolic pattern-based approaches over AST (only $4.9\%$ coverage on HumanEval, with no statistically significant median gain); (3) empirical evidence of \emph{strong heterogeneity across LLMs} for the code-optimization task (hallucination varying $4\times$, coverage varying $2\times$, only one of the three models reaching statistical significance in median speedup); and (4) guidelines for the safe use of LLMs in optimization pipelines -- notably, the obligation of test-based semantic validation, the need for empirical model selection on the target domain (one cannot simply assume a ``modern'' LLM works), and the adoption of a verification mesh inspired by systems such as DocAgent \cite{yang2025docagent}.
 
 \bibliographystyle{IEEEtran}
 \bibliography{references}
