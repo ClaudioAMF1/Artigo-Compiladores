@@ -27,7 +27,7 @@ for fname, label, color in CONFIGS:
 
 ax.axvline(0.0, color="red", linestyle="--", linewidth=1, label=r"sp = $1\times$")
 ax.set_xlabel(r"$\log_{10}(\mathrm{speedup})$")
-ax.set_ylabel("frequência")
+ax.set_ylabel("frequency")
 ax.legend(loc="upper right", fontsize=7, framealpha=0.85)
 fig.tight_layout()
 fig.savefig(RESULTS / "fig_comparison_hist.pdf", bbox_inches="tight", pad_inches=0.05)

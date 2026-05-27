@@ -1,6 +1,8 @@
-# Artigo de Compiladores — Uso de LLMs para Otimização de Código Python
+# Compilers Article — Using LLMs for Python Code Optimization
 
-**Título:** Uso de Modelos de Linguagem para Otimização de Código Python: Limites e Possibilidades em Linguagens Dinâmicas
+**Title:** Using Language Models for Python Code Optimization: Limits and Possibilities in Dynamic Languages
+**Article language:** English (LaTeX `babel=english`)
+**README language:** Portuguese (this file)
 
 **Repositório:** [`ClaudioAMF1/Artigo-Compiladores`](https://github.com/ClaudioAMF1/Artigo-Compiladores)
 **Branch de desenvolvimento:** `claude/write-article-iUXd0`
