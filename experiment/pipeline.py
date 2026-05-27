@@ -185,7 +185,7 @@ def main() -> int:
         "--backend",
         type=str,
         default="rule_based",
-        choices=["rule_based", "gemini", "openai", "groq", "together"],
+        choices=["rule_based", "gemini", "openai", "groq", "together", "github_models"],
         help="backend do otimizador",
     )
     parser.add_argument("--model", type=str, default=None)
