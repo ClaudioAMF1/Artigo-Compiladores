@@ -204,10 +204,8 @@ Harmonic mean speedup\textsuperscript{$\dagger$} & 0.986$\times$ \\
 Maximum speedup\textsuperscript{$\dagger$} & 615.378$\times$ \\
 Minimum speedup\textsuperscript{$\dagger$} & 0.361$\times$ \\
 \hline
+\multicolumn{2}{p{0.92\columnwidth}}{\scriptsize \textsuperscript{$\dagger$}\,Statistics computed over the 155 problems with measurable time; the 9 problems in which both original and optimized times fell below the clock resolution (1$\mu$s) are excluded, as they yield no well-defined ratio.} \\
 \end{tabular}
-\vspace{0.1cm}
-\raggedright
-\scriptsize \textsuperscript{$\dagger$}{Statistics computed over the 155 problems with measurable time; the 9 problems in which both original and optimized times fell below the clock resolution (1$\mu$s) are excluded, as they yield no well-defined ratio.}
 \end{table}
 
 Table~\ref{tab:agregado} summarizes the results. \textbf{Semantic preservation is total}: none of the 164 transformations produced by the deterministic optimizer broke the HumanEval tests. However, the vast majority of problems (126 of 164) show a neutral speedup (between 0.95$\times$ and 1.05$\times$), indicating that no syntactic pattern of the implemented rules was detected. The arithmetic mean speedup (5.927$\times$) is inflated by two memoization outliers, while the median speedup (1.003$\times$) and the harmonic mean (0.986$\times$) more faithfully reflect the typical impact.
@@ -355,10 +353,8 @@ Maximum speedup\textsuperscript{$\dagger$} & 615.4$\times$ & 299.3$\times$ & 122
 Improvement coverage & 9.1\% & \textbf{54.3\%} & 27.4\% & 37.2\% \\
 Improvements/regressions ratio & 1.07 & \textbf{2.02} & 0.90 & 1.27 \\
 \hline
+\multicolumn{5}{p{0.98\textwidth}}{\scriptsize \textsuperscript{$\dagger$}\,Statistics computed over problems with measurable time and semantically valid code (sp $>$ 0).} \\
 \end{tabular}
-\vspace{0.1cm}
-\raggedright
-\scriptsize \textsuperscript{$\dagger$}{Statistics computed over problems with measurable time and semantically valid code (sp $>$ 0).}
 \end{table*}
 
 Table~\ref{tab:llm_vs_base} reveals a more sophisticated pattern than the initial hypothesis would suggest. Five empirical observations stand out:
