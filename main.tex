@@ -11,6 +11,7 @@
 \usepackage[english]{babel}
 \usepackage{cite}
 \usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithm}
 \usepackage{algorithmic}
 \usepackage{graphicx}
 \usepackage{textcomp}
@@ -152,6 +153,98 @@ The proposed architecture is organized in five modules, described below:
 \end{enumerate}
 
 The complete pipeline can be interpreted as a feedback-assisted loop: failures detected in the validation module can be re-introduced into the prompt in a strategy analogous to self-refine.
+
+\subsection{Static Feature Extraction}
+The Static Analysis Module is realised as a single pass over the AST that materialises eight numerical features used both as conditioning signals for the LLM prompt and as filtering criteria for the deterministic rule optimiser. Algorithm~\ref{alg:features} sketches the procedure.
+
+\begin{algorithm}[htbp]
+\caption{Static feature extraction over the AST}
+\label{alg:features}
+\begin{algorithmic}[1]
+\REQUIRE Source code $s$, entry-point name $e$
+\ENSURE Feature vector $f$
+\STATE $T \leftarrow \mathrm{ast.parse}(s)$
+\STATE $f \leftarrow \{\mathit{nfun} \!\!=\!\! 0, \mathit{nloop}\!\!=\!\!0, \mathit{depth}\!\!=\!\!0, \mathit{ncall}\!\!=\!\!0,$
+\STATE $\quad\quad \mathit{nrec}\!\!=\!\!0, \mathit{ncomp}\!\!=\!\!0, \mathit{typed}\!\!=\!\!\mathit{false}, \mathit{imp}\!\!=\!\!\emptyset\}$
+\STATE $d \leftarrow 0$
+\FOR{\textbf{each} node $n$ in pre-order traversal of $T$}
+  \IF{$n$ is \texttt{FunctionDef}}
+    \STATE $f.\mathit{nfun} \leftarrow f.\mathit{nfun}+1$
+    \IF{$n$ has return or argument annotation}
+      \STATE $f.\mathit{typed} \leftarrow \mathit{true}$
+    \ENDIF
+  \ELSIF{$n$ is \texttt{For} or \texttt{While}}
+    \STATE $f.\mathit{nloop} \leftarrow f.\mathit{nloop}+1; \;\; d \leftarrow d+1$
+    \STATE $f.\mathit{depth} \leftarrow \max(f.\mathit{depth}, d)$
+  \ELSIF{$n$ is \texttt{Call}}
+    \STATE $f.\mathit{ncall} \leftarrow f.\mathit{ncall}+1$
+    \IF{$n.\mathit{func}$ is \texttt{Name} \AND $n.\mathit{func}.\mathit{id} = e$}
+      \STATE $f.\mathit{nrec} \leftarrow f.\mathit{nrec}+1$ \quad // recursive call
+    \ENDIF
+  \ELSIF{$n$ is \texttt{ListComp}/\texttt{DictComp}/\texttt{SetComp}/\texttt{GeneratorExp}}
+    \STATE $f.\mathit{ncomp} \leftarrow f.\mathit{ncomp}+1$
+  \ELSIF{$n$ is \texttt{Import} or \texttt{ImportFrom}}
+    \STATE add module name(s) to $f.\mathit{imp}$
+  \ENDIF
+  \STATE \textbf{after children of} \texttt{For}/\texttt{While}: $d \leftarrow d-1$
+\ENDFOR
+\RETURN $f$
+\end{algorithmic}
+\end{algorithm}
+
+This vector serves two purposes in the pipeline. First, it is serialised into the LLM prompt as plain text (e.g.\ ``\textit{this function has 2 loops with max nesting depth 1, 5 calls of which 2 are recursive, no type annotations}''), giving the model an explicit summary of the structural shape of the input rather than forcing it to recover that information from the raw source. Second, the deterministic rule optimiser uses $f.\mathit{nrec} > 0$ as a precondition for the \texttt{lru\_cache} rule (R1) and $f.\mathit{nloop} > 0$ as a precondition for the \texttt{sum}, \texttt{join}, and \texttt{frozenset} rules (R2, R4, R5), avoiding wasted AST rewrites on functions that cannot possibly match.
+
+\subsection{LLM Prompt and Output Parsing}
+The LLM optimiser uses a fixed system--user prompt template (Listing~\ref{lst:system_prompt}) that emphasises three constraints: signature preservation, semantics preservation, and a code-only response delimited by a ` ```python ... ``` ` fence. The fence requirement is structural --- it allows the response to be machine-parsed by a single regular expression --- and is the source of the Class B failures discussed in Section~\ref{sec:error_analysis}.
+
+\begin{lstlisting}[caption={System prompt (translated to English from the Portuguese version actually used in the experiments). The user prompt is built by appending the AST feature summary and the original source code below this template.}, label={lst:system_prompt}, language=, basicstyle=\ttfamily\scriptsize, breaklines=true]
+You are an expert assistant in compilers and Python
+code optimization. Given a Python function, you must
+return a semantically equivalent and more efficient
+version (lower execution time and/or lower memory
+use). Follow these rules strictly:
+
+1. Preserve the function signature exactly (name,
+   parameters, type annotations, parameter order).
+2. Preserve observable behaviour for every valid
+   input.
+3. Do NOT remove imports that are needed; add only
+   imports strictly required by the optimised
+   version (prefer the standard library).
+4. Reply ONLY with the complete Python code of the
+   optimised function (and any needed imports),
+   inside a single fenced code block delimited by
+   triple backticks: ```python ... ```.
+5. Do NOT include explanations, tests, or example
+   uses. Code only.
+\end{lstlisting}
+
+Algorithm~\ref{alg:validate} describes the validation harness applied to every candidate transformation. The harness is the structural backbone of the test-based mitigation strategy: by composing dynamic execution of the candidate against the official HumanEval test, a hard $10$-second wall-clock timeout via \texttt{SIGALRM}, and a typed exception channel, it converts every potential silent hallucination into one of the four failure classes catalogued in Section~\ref{sec:error_analysis}.
+
+\begin{algorithm}[htbp]
+\caption{Test-based validation harness}
+\label{alg:validate}
+\begin{algorithmic}[1]
+\REQUIRE Candidate code $c$, test code $t$, entry point $e$, timeout $\tau$
+\ENSURE \texttt{(passed, error)} pair
+\STATE install \texttt{SIGALRM} handler that raises \texttt{TimeoutError}
+\STATE set interval timer to $\tau$ seconds
+\STATE $N \leftarrow$ fresh namespace
+\STATE \textbf{enter} guarded block:
+\STATE \quad \texttt{exec(compile($c$, '<llm>', 'exec'), $N$)}
+\STATE \quad \textbf{if} $e \notin N$ \textbf{then return} \texttt{(false, "entry\_point absent")}
+\STATE \quad \texttt{exec(compile($t$, '<test>', 'exec'), $N$)}
+\STATE \quad \textbf{if} \texttt{check} $\notin N$ \textbf{then return} \texttt{(false, "check absent")}
+\STATE \quad \texttt{$N$['check']($N$[$e$])} \quad // run all official assertions
+\STATE \quad \textbf{return} \texttt{(true, $\bot$)}
+\STATE \textbf{on} \texttt{TimeoutError}: \textbf{return} \texttt{(false, "timeout")}
+\STATE \textbf{on} \texttt{AssertionError} as $a$: \textbf{return} \texttt{(false, "assertion: " + str($a$))}
+\STATE \textbf{on} \texttt{Exception} as $x$: \textbf{return} \texttt{(false, type($x$) + ": " + str($x$))}
+\STATE \textbf{finally}: clear interval timer; restore previous handler
+\end{algorithmic}
+\end{algorithm}
+
+The benchmark module composes a reproducible workload from the very \texttt{candidate(\ldots)} calls embedded in the HumanEval test (extracted by a paren-balanced scan rather than full AST parsing of the test, which contains arbitrarily complex assertions). Reusing the test calls has three advantages over synthesising new inputs: it preserves the typical input-size distribution of the problem; it eliminates the need to author a per-problem driver; and it makes the workload deterministic for a given $(\mathit{repeats}, \mathit{workload\_multiplier})$ pair.
 
 \subsection{Evaluation Metrics}
 The evaluation considers four metrics: (i) \textbf{semantic preservation rate}, the fraction of optimized codes that pass all HumanEval tests; (ii) arithmetic, median, and harmonic \textbf{mean speedup} relative to the original version; (iii) \textbf{improvement rate}, the fraction of problems with speedup above $1.05\times$; and (iv) \textbf{regression rate}, the fraction of problems with speedup below $0.95\times$. Additionally, the distribution of rules triggered by the deterministic baseline is reported.
@@ -382,6 +475,118 @@ Figure~\ref{fig:hist_comparison} visually emphasizes this heterogeneity: while t
 
 \subsubsection*{Implication for the central thesis}
 The joint reading of Table~\ref{tab:llm_vs_base} and Figure~\ref{fig:hist_comparison} supports a more precise version of the initial hypothesis: \emph{LLMs expand the optimization frontier relative to the symbolic baseline, but the effective gain is highly dependent on the chosen model}. In a production pipeline, this means that LLM selection must be treated as an engineering decision empirically validated on the target domain -- not as a neutral technical choice. The mandatory presence of the test-based validation module is the mechanism that makes this risk acceptable: it turns silent hallucinations into detected failures, keeping effective semantic preservation close to $100\%$ at the cost of discarding between $6\%$ and $23\%$ of the LLM's outputs.
+
+\subsection{Error Analysis: Failure Modes by Model}
+\label{sec:error_analysis}
+
+The aggregate hallucination rates of Table~\ref{tab:llm_vs_base} hide a qualitatively important asymmetry: failures across the three LLMs do not share the same character. By inspecting the \texttt{optimized\_error} field of each invalid record in the result JSON files, we partitioned the 77 LLM failures (10 from Gemini, 38 from Llama, 29 from GPT-4o-mini) into four failure classes:
+
+\begin{enumerate}
+  \item \textbf{Assertion failure (Class A)} -- the code parsed, executed, and returned a value, but the value disagreed with the HumanEval reference. This is the canonical ``hallucination'' as commonly understood: the model proposed a transformation that looks plausible but breaks the function semantically.
+  \item \textbf{Empty/unparseable response (Class B)} -- the model's output could not be decoded by the regex that extracts the ` ```python ... ``` ` block, or the extracted block did not define the entry point. This is a \emph{format failure} rather than a semantic one: the LLM either returned prose, an empty block, or text the parser could not recover.
+  \item \textbf{Runtime exception (Class C)} -- the code parsed and ran but raised \texttt{TypeError}, \texttt{ValueError}, \texttt{NameError}, or similar before reaching the assertion.
+  \item \textbf{Timeout (Class D)} -- execution exceeded the 10\,s \texttt{SIGALRM} window, typically because the candidate transformation introduced an infinite loop or pathological complexity.
+\end{enumerate}
+
+\begin{table}[htbp]
+\caption{Failure modes of the 77 invalid LLM outputs, by class. Class B (format failure) dominates the weaker models, suggesting that improved output parsing and retry alone could recover a significant fraction of their losses.}
+\label{tab:error_modes}
+\centering
+\footnotesize
+\begin{tabular}{lrrr|r}
+\hline
+\textbf{Failure class} & \textbf{Gemini} & \textbf{Llama 70B} & \textbf{GPT-4o-mini} & \textbf{Total} \\
+\hline
+A -- assertion failure & 10 & 11 & 11 & 32 \\
+B -- empty/unparseable & 0 & 27 & 16 & 43 \\
+C -- runtime exception & 0 & 0 & 2 & 2 \\
+D -- timeout & 0 & 0 & 0 & 0 \\
+\hline
+\textbf{Total} & 10 & 38 & 29 & 77 \\
+\hline
+\multicolumn{5}{p{0.92\columnwidth}}{\scriptsize Class B failures arise when the LLM response either contains no ` ```python``` ` block recognised by the parsing regex or returns a block in which the \texttt{entry\_point} function is absent.} \\
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:error_modes} reveals a structurally important fact: \emph{Gemini's failures are exclusively true semantic hallucinations (Class A)}, whereas the bulk of Llama 70B's (71\%) and GPT-4o-mini's (55\%) failures are \emph{format failures}, i.e., responses that the wrapper code could not even parse. This has two immediate implications.
+
+First, the headline ``$23.2\%$ hallucination rate'' for Llama is misleading: only $11/164 = 6.7\%$ of its outputs are genuine semantic errors, comparable to Gemini's $6.1\%$. The remaining $27/164 = 16.5\%$ are recoverable engineering failures. A more robust output parser (e.g., one that accepts code outside fenced blocks, falls back to AST-based extraction, or retries with a stricter system message) would close most of this gap.
+
+Second, the semantic hallucination floor across all three models is remarkably stable at $10$--$11$ failures, suggesting that the genuine difficulty of producing a semantically equivalent transformation is determined more by the \emph{task} (a fraction of HumanEval problems involve subtle invariants that any LLM at this scale struggles to preserve) than by the \emph{model}. Identifying these task-intrinsic failures and characterising what makes them hard is a natural next step.
+
+\subsection{Win Distribution by Transformation Class}
+\label{sec:win_distribution}
+
+Symmetrically, we classified the wins (problems with measured speedup $>1.05\times$) by the type of transformation the LLM applied. Manual inspection of the top-10 improvement of each backend, sorted by speedup, allows them to be grouped into five recurring classes:
+
+\begin{itemize}
+  \item \textbf{T1 -- Memoization}: addition of \texttt{functools.lru\_cache} to a pure recursive function. Effect: $O(2^n)\!\to\!O(n)$ amortised. Examples: \texttt{fib}, \texttt{fibfib}.
+  \item \textbf{T2 -- Algorithmic substitution}: replacement of an $O(n)$ or $O(n^2)$ algorithm by a known $O(\sqrt{n})$ or $O(\log n)$ alternative. Examples: \texttt{is\_prime} (trial division up to $\sqrt{n}$), \texttt{largest\_prime\_factor} (sieve / division loop), \texttt{modp} (replace manual modular exponentiation by \texttt{pow(a, b, m)}).
+  \item \textbf{T3 -- Closed-form math}: replacement of an iterative computation by an analytical formula. Examples: \texttt{sum\_to\_n} ($n(n+1)/2$), \texttt{rounded\_avg} (closed-form integer sum), arithmetic-progression sums.
+  \item \textbf{T4 -- Control-flow simplification}: collapsing nested conditionals or short-circuiting boolean predicates. Examples: \texttt{x\_or\_y}, \texttt{closest\_integer}, \texttt{is\_palindrome}.
+  \item \textbf{T5 -- Builtin substitution}: replacing a hand-written loop or comprehension by a faster \texttt{builtin} or \texttt{stdlib} operation (e.g., \texttt{sum()}, \texttt{any()}, \texttt{set()}, \texttt{collections.Counter}).
+\end{itemize}
+
+\begin{table}[htbp]
+\caption{Distribution of the top-10 wins of each LLM across the five transformation classes T1--T5 defined above. The dominant high-magnitude win (memoization, $> 100\times$) is found by every model, but the long tail differs.}
+\label{tab:win_classes}
+\centering
+\footnotesize
+\begin{tabular}{lrrr}
+\hline
+\textbf{Class} & \textbf{Gemini} & \textbf{Llama 70B} & \textbf{GPT-4o-mini} \\
+\hline
+T1 -- memoization & 3 & 2 & 2 \\
+T2 -- algorithmic substitution & 3 & 1 & 3 \\
+T3 -- closed-form math & 2 & 2 & 1 \\
+T4 -- control-flow simplification & 1 & 3 & 2 \\
+T5 -- builtin substitution & 1 & 2 & 2 \\
+\hline
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:win_classes} shows that all three models discovered the highest-impact transformation class (T1, memoization) and produced at least one $> 100\times$ speedup. The difference between models lies in the breadth: Gemini's wins concentrate in the high-magnitude classes (T1--T3), while Llama and GPT-4o-mini compensate with more wins in the lower-magnitude classes (T4--T5). This explains why Gemini achieves both higher median speedup and higher maximum, despite the three models having similar peak capabilities -- the gap is in \emph{consistency of class selection}, not in raw algorithmic knowledge.
+
+\subsection{Cross-Model Agreement on Improvements}
+\label{sec:cross_model}
+
+A third dimension of the multi-model comparison is \emph{which} problems each backend was able to improve. Computing the intersections of the improvement sets (problems with speedup $> 1.05\times$ under each backend) produces the partition shown in Table~\ref{tab:agreement}.
+
+\begin{table}[htbp]
+\caption{Cross-model agreement on improvements ($> 1.05\times$) over the 164 HumanEval problems. The 3-LLM union (113) is the empirical upper bound of what LLM-based optimisation can address on this benchmark with the prompt held constant.}
+\label{tab:agreement}
+\centering
+\footnotesize
+\begin{tabular}{lr}
+\hline
+\textbf{Subset} & \textbf{Problems} \\
+\hline
+Improved by AST baseline & 15 \\
+Improved by Gemini & 89 \\
+Improved by Llama 70B & 45 \\
+Improved by GPT-4o-mini & 61 \\
+\hline
+Improved by \emph{all three LLMs} (3-LLM core) & 26 \\
+Improved by \emph{only Gemini} (Gemini-exclusive) & 36 \\
+Improved by \emph{at least one LLM} (3-LLM union) & 113 \\
+Improved by baseline \emph{and} at least one LLM & 10 \\
+Improved by baseline \emph{and} all three LLMs & 3 \\
+\hline
+\end{tabular}
+\end{table}
+
+Three observations emerge from Table~\ref{tab:agreement}. First, the \emph{3-LLM core} of 26 problems represents the ``easy wins'' that any reasonable code LLM at this scale can address with our prompt; this is the natural target set for ensembling or majority-vote strategies. Second, Gemini's \emph{exclusive} contribution of 36 problems is what drives its dominance in the aggregate metrics: more than a third of its improvements are missed by both alternatives. Third, the \emph{3-LLM union} of 113 is the empirical upper bound of LLM-based optimisation \emph{under this fixed prompt} on this dataset --- a future system that picked the best of the three LLMs per problem would reach $113/164 = 68.9\%$ improvement coverage at the cost of $3\times$ the inference compute.
+
+Notably, only $10$ of the baseline's $15$ wins are also caught by at least one LLM, and only $3$ are caught by all three. The remaining $5$ baseline-exclusive wins are cases where the deterministic R1 rule fires on a well-formed recursive function but the LLMs, for unclear reasons, return either a marginally different formulation or fail to apply the same memoisation. This is a small but interesting anomaly that motivates a hybrid \emph{baseline + LLM} pipeline in which the deterministic rules act as a safety net for the patterns they recognise.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.95\columnwidth]{experiment/results/fig_gemini_scatter.pdf}
+\caption{Per-problem optimised vs.\ original execution time under Gemini 2.5 Flash Lite (log--log scale). Points below the red identity line are improvements; points above are regressions. The two extreme outliers in the lower-left correspond to the memoisation wins (\texttt{fib}, \texttt{fibfib}); the points clustered near identity reflect the many near-neutral transformations on small inputs.}
+\label{fig:scatter_gemini}
+\end{figure}
+
+Figure~\ref{fig:scatter_gemini} renders the per-problem trade-off for Gemini in scatter form (the other three backends produce qualitatively similar plots and are omitted for space). The visual pattern -- a dense diagonal cluster near the identity line, a clear lower-left lobe of high-impact wins, and a thinner upper-left band of regressions -- matches the distributional analysis of Figures~\ref{fig:hist_baseline} and~\ref{fig:hist_comparison} and provides an intuitive per-problem view of the same data.
 
 \section{Discussion: Limits and Possibilities}
 \label{sec:discussao}
