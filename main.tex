@@ -28,7 +28,14 @@
   numberstyle=\tiny,
   language=Python,
   showstringspaces=false,
-  tabsize=2
+  tabsize=2,
+  aboveskip=1.2em,
+  belowskip=1.0em,
+  abovecaptionskip=0.8em,
+  belowcaptionskip=0.9em,
+  captionpos=t,
+  xleftmargin=1em,
+  framexleftmargin=1em
 }
 
 \def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
@@ -250,7 +257,7 @@ This vector serves two purposes in the pipeline. First, it is serialised into th
 \subsection{LLM Prompt and Output Parsing}
 The LLM optimiser uses a fixed system--user prompt template (Listing~\ref{lst:system_prompt}) that emphasises three constraints: signature preservation, semantics preservation, and a code-only response delimited by a ` ```python ... ``` ` fence. The fence requirement is structural --- it allows the response to be machine-parsed by a single regular expression --- and is the source of the Class B failures discussed in Section~\ref{sec:error_analysis}.
 
-\begin{lstlisting}[caption={System prompt (translated to English from the Portuguese version actually used in the experiments). The user prompt is built by appending the AST feature summary and the original source code below this template.}, label={lst:system_prompt}, language=, basicstyle=\ttfamily\scriptsize, breaklines=true]
+\begin{lstlisting}[caption={System prompt used by the LLM optimiser (English translation; the user prompt appends the AST feature summary and the original source).}, label={lst:system_prompt}, language=, basicstyle=\ttfamily\scriptsize, breaklines=true]
 You are an expert assistant in compilers and Python
 code optimization. Given a Python function, you must
 return a semantically equivalent and more efficient
@@ -570,24 +577,26 @@ Second, the semantic hallucination floor across all three models is remarkably s
 \subsubsection*{Class A example: silent semantic divergence}
 Listing~\ref{lst:fail_classA} is a representative Class A failure from Gemini on \texttt{HumanEval/7} (\texttt{filter\_by\_substring}). The original returns the list of strings in \texttt{strings} that contain \texttt{substring}. Gemini's optimised version replaced the predicate-based filter by a list comprehension whose membership test inverted the operand order:
 
-\begin{lstlisting}[caption={Class A failure (Gemini, HumanEval/7): membership test with operands swapped. The function compiles, runs, and returns a list; the assertion only fails on inputs where \texttt{substring} is itself a substring of one of the strings rather than the converse.}, label={lst:fail_classA}]
+\begin{lstlisting}[caption={Class A failure: Gemini on HumanEval/7.}, label={lst:fail_classA}]
 def filter_by_substring(strings, substring):
     # WRONG: tests `s in substring` instead of
     # `substring in s` -- semantically inverted.
     return [s for s in strings if s in substring]
 \end{lstlisting}
 
-The defect is structural: no syntax error, no runtime exception, no timeout --- only a wrong answer detected by the official assertion. This is exactly the failure mode that motivates the test-based validation harness: without an executable oracle, the transformation would silently ship.
+The function in Listing~\ref{lst:fail_classA} compiles, runs, and returns a list; the assertion only fails on inputs where \texttt{substring} is itself a substring of one of the strings rather than the converse. The defect is structural: no syntax error, no runtime exception, no timeout --- only a wrong answer detected by the official assertion. This is exactly the failure mode that motivates the test-based validation harness: without an executable oracle, the transformation would silently ship.
 
 \subsubsection*{Class B example: empty or unparseable response}
 Listing~\ref{lst:fail_classB} reproduces a representative Class B failure from Llama 3.3 70B on \texttt{HumanEval/2} (\texttt{truncate\_number}). The model's response, instead of a fenced code block, was a short natural-language description of why the function is already efficient. The regex that scans for ` ```python ... ``` ` returned no match, the parser fell back to the raw text, and the validation harness rejected the candidate because \texttt{truncate\_number} was not defined in the resulting namespace.
 
-\begin{lstlisting}[caption={Class B failure (Llama 70B, HumanEval/2): the LLM returned prose instead of a fenced code block. The validation harness reports ``optimiser did not return code'' and the candidate is discarded.}, label={lst:fail_classB}]
+\begin{lstlisting}[caption={Class B failure: Llama 70B on HumanEval/2.}, label={lst:fail_classB}]
 # (Llama response, abbreviated)
 # The function `truncate_number(number)` is already
 # efficient. It uses `int()` to compute the integer
 # part and subtracts ... [no code block followed]
 \end{lstlisting}
+
+In the case of Listing~\ref{lst:fail_classB}, the validation harness reports ``optimiser did not return code'' and the candidate is discarded.
 
 Class B failures are structurally less informative than Class A failures: they reveal nothing about the model's semantic capability, only about its compliance with the formatting contract. The asymmetry between Gemini (0 Class B) and Llama 70B / GPT-4o-mini ($\geq 16$ Class B each) suggests that instruction-following discipline, not raw code-generation capability, dominates the observed gap. This is consistent with the observation that all three models successfully apply the same algorithmic transformations (Section~\ref{sec:win_distribution}) when they manage to emit any code at all.
 
@@ -684,14 +693,14 @@ Figure~\ref{fig:scatter_gemini} renders the per-problem trade-off for Gemini in 
 
 To make the heterogeneity tangible at the level of a single problem, we examine \texttt{HumanEval/55} (\texttt{fib}), the canonical recursive Fibonacci that yields the most dramatic gains across every back-end. Listing~\ref{lst:case_orig} reproduces the canonical solution that all four back-ends receive as input. Listings~\ref{lst:case_gem}--\ref{lst:case_gpt} show the optimisations produced by each LLM, together with the measured speedup.
 
-\begin{lstlisting}[caption={Original \texttt{fib} (HumanEval/55) -- the same canonical solution fed to all four back-ends.}, label={lst:case_orig}]
+\begin{lstlisting}[caption={Original \texttt{fib} (HumanEval/55), fed to all back-ends.}, label={lst:case_orig}]
 def fib(n: int):
     if n == 0: return 0
     if n == 1: return 1
     return fib(n-1) + fib(n-2)
 \end{lstlisting}
 
-\begin{lstlisting}[caption={Gemini 2.5 Flash Lite -- adds \texttt{@lru\_cache} to the recursive function (speedup $\mathbf{157.22\times}$).}, label={lst:case_gem}]
+\begin{lstlisting}[caption={Gemini 2.5 Flash Lite on \texttt{fib} (speedup $\mathbf{157.22\times}$).}, label={lst:case_gem}]
 from functools import lru_cache
 
 @lru_cache(maxsize=None)
@@ -701,7 +710,7 @@ def fib(n: int):
     return fib(n-1) + fib(n-2)
 \end{lstlisting}
 
-\begin{lstlisting}[caption={Llama 3.3 70B -- same memoisation strategy, slightly noisier per-call overhead (speedup $\mathbf{122.72\times}$).}, label={lst:case_lla}]
+\begin{lstlisting}[caption={Llama 3.3 70B on \texttt{fib} (speedup $\mathbf{122.72\times}$).}, label={lst:case_lla}]
 from functools import lru_cache
 
 @lru_cache(maxsize=None)
@@ -711,7 +720,7 @@ def fib(n: int):
     return fib(n - 1) + fib(n - 2)
 \end{lstlisting}
 
-\begin{lstlisting}[caption={GPT-4o-mini -- iterative formulation (no \texttt{lru\_cache}). The two-variable recurrence is asymptotically $O(n)$ but pays a constant-factor penalty (speedup $\mathbf{19.17\times}$).}, label={lst:case_gpt}]
+\begin{lstlisting}[caption={GPT-4o-mini -- iterative $O(n)$ formulation, no \texttt{lru\_cache} (speedup $\mathbf{19.17\times}$).}, label={lst:case_gpt}]
 def fib(n: int):
     if n == 0: return 0
     a, b = 0, 1
@@ -719,6 +728,8 @@ def fib(n: int):
         a, b = b, a + b
     return b
 \end{lstlisting}
+
+The iterative two-variable recurrence in Listing~\ref{lst:case_gpt} is asymptotically $O(n)$ but pays a constant-factor penalty relative to memoisation under our repeated-call workload.
 
 Three observations follow from this comparative case. First, the algorithmic insight is shared: all three LLMs recognise that an exponential-time recurrence on small integers can be reduced to linear time. The deterministic AST baseline reaches the same conclusion through its R1 rule (Listing~\ref{lst:fib_r1}). Second, the chosen \emph{implementation strategy} differs: Gemini and Llama converge on the decorator-based memoisation that the baseline also produces, while GPT-4o-mini rewrites the function iteratively. The two strategies are asymptotically equivalent but have very different constant factors --- the iterative version avoids the per-call hashing of \texttt{lru\_cache} but loses the memoisation across repeated calls of the same input. Third, the magnitude gap between Gemini ($157.22\times$) and GPT-4o-mini ($19.17\times$) on the \emph{same problem with the same strategy class} (T2) is not a difference in algorithmic capability, but in how well each model exploits the dominant cost in this particular benchmark (the test repeats the same calls under our 200-fold workload multiplier, which rewards memoisation more than asymptotic improvement). This single-problem view illustrates why aggregated comparisons of LLMs for code transformation must report both the median (which captures typical impact) and the maximum (which captures peak capability) --- the two metrics can move independently across the same model pair.
 
