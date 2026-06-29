@@ -257,7 +257,9 @@ This vector serves two purposes in the pipeline. First, it is serialised into th
 \subsection{LLM Prompt and Output Parsing}
 The LLM optimiser uses a fixed system--user prompt template (Listing~\ref{lst:system_prompt}) that emphasises three constraints: signature preservation, semantics preservation, and a code-only response delimited by a ` ```python ... ``` ` fence. The fence requirement is structural --- it allows the response to be machine-parsed by a single regular expression --- and is the source of the Class B failures discussed in Section~\ref{sec:error_analysis}.
 
-\begin{lstlisting}[caption={System prompt used by the LLM optimiser (English translation; the user prompt appends the AST feature summary and the original source).}, label={lst:system_prompt}, language=, basicstyle=\ttfamily\scriptsize, breaklines=true]
+\par\medskip\noindent
+\begin{minipage}{\columnwidth}
+\begin{lstlisting}[caption={System prompt used by the LLM optimiser.}, label={lst:system_prompt}, language=, basicstyle=\ttfamily\scriptsize, breaklines=true]
 You are an expert assistant in compilers and Python
 code optimization. Given a Python function, you must
 return a semantically equivalent and more efficient
@@ -278,6 +280,7 @@ use). Follow these rules strictly:
 5. Do NOT include explanations, tests, or example
    uses. Code only.
 \end{lstlisting}
+\end{minipage}\par\medskip
 
 Algorithm~\ref{alg:validate} describes the validation harness applied to every candidate transformation. The harness is the structural backbone of the test-based mitigation strategy: by composing dynamic execution of the candidate against the official HumanEval test, a hard $10$-second wall-clock timeout via \texttt{SIGALRM}, and a typed exception channel, it converts every potential silent hallucination into one of the four failure classes catalogued in Section~\ref{sec:error_analysis}.
 
@@ -312,6 +315,8 @@ The evaluation considers four metrics: (i) \textbf{semantic preservation rate}, 
 \subsection{Illustrative Example}
 Listing~\ref{lst:original} shows a code typically found in competitive-programming datasets, and Listing~\ref{lst:otimizado} shows a transformation expected from the LLM.
 
+\par\medskip\noindent
+\begin{minipage}{\columnwidth}
 \begin{lstlisting}[caption={Original code with explicit loop.}, label={lst:original}]
 def sum_of_squares(n):
     total = 0
@@ -319,12 +324,16 @@ def sum_of_squares(n):
         total = total + i * i
     return total
 \end{lstlisting}
+\end{minipage}\par\medskip
 
+\par\medskip\noindent
+\begin{minipage}{\columnwidth}
 \begin{lstlisting}[caption={Optimized version suggested by the LLM.}, label={lst:otimizado}]
 def sum_of_squares(n):
     # closed form: n*(n-1)*(2n-1)/6
     return n * (n - 1) * (2 * n - 1) // 6
 \end{lstlisting}
+\end{minipage}\par\medskip
 
 This kind of algorithmic transformation would hardly be produced by a classical compiler, since it requires semantic knowledge of the underlying mathematical domain.
 
@@ -433,13 +442,18 @@ Three central observations emerge from the empirical results:
 \subsection{Qualitative Analysis}
 To concretize the discussed phenomena, we examine two representative cases drawn from Table~\ref{tab:detalhe}: \textbf{HumanEval/55} (\texttt{fib}), where rule R1 produces the second largest gain of the experiment ($151.8\times$), and \textbf{HumanEval/74} (\texttt{total\_match}), where rule R2 produces the worst observed regression ($0.36\times$).
 
+\par\medskip\noindent
+\begin{minipage}{\columnwidth}
 \begin{lstlisting}[caption={Original \texttt{fib} (HumanEval/55).}, label={lst:fib_orig}]
 def fib(n: int):
     if n == 0: return 0
     if n == 1: return 1
     return fib(n-1) + fib(n-2)
 \end{lstlisting}
+\end{minipage}\par\medskip
 
+\par\medskip\noindent
+\begin{minipage}{\columnwidth}
 \begin{lstlisting}[caption={R1 version (\texttt{lru\_cache}) --- amortized $O(n)$.}, label={lst:fib_r1}]
 from functools import lru_cache
 
@@ -449,9 +463,12 @@ def fib(n: int):
     if n == 1: return 1
     return fib(n-1) + fib(n-2)
 \end{lstlisting}
+\end{minipage}\par\medskip
 
 The transformation in Listing~\ref{lst:fib_r1} adds a single decorator and reduces the observable complexity from $O(2^n)$ to amortized $O(n)$ per call, yielding a measured speedup of $151.8\times$. This is the kind of \emph{algorithmic} transformation a classical compiler does not perform, since it requires recognizing the function as a pure recurrence over small integers.
 
+\par\medskip\noindent
+\begin{minipage}{\columnwidth}
 \begin{lstlisting}[caption={Original \texttt{total\_match} (HumanEval/74).}, label={lst:tm_orig}]
 def total_match(lst1, lst2):
     l1 = 0
@@ -463,7 +480,10 @@ def total_match(lst1, lst2):
     if l1 <= l2: return lst1
     else: return lst2
 \end{lstlisting}
+\end{minipage}\par\medskip
 
+\par\medskip\noindent
+\begin{minipage}{\columnwidth}
 \begin{lstlisting}[caption={R2 version (\texttt{sum()}) --- regression $0.36\times$.}, label={lst:tm_r2}]
 def total_match(lst1, lst2):
     l1 = sum(len(st) for st in lst1)
@@ -471,6 +491,7 @@ def total_match(lst1, lst2):
     if l1 <= l2: return lst1
     else: return lst2
 \end{lstlisting}
+\end{minipage}\par\medskip
 
 The version in Listing~\ref{lst:tm_r2} is \emph{idiomatic} in Python and would be considered superior in a code review. However, in benchmarks with small lists (typical HumanEval inputs contain 0 to 5 strings) the cost of creating and iterating over the generator expression exceeds the gain of the C-implemented \texttt{sum()}, resulting in performance 2.77 times worse. This is the paradigmatic example of a transformation whose \emph{decision} requires contextual information (typical input size, call frequency) that is outside the reach of syntactic matching -- and within reach of a language model capable of reasoning about amortized cost.
 
@@ -577,24 +598,30 @@ Second, the semantic hallucination floor across all three models is remarkably s
 \subsubsection*{Class A example: silent semantic divergence}
 Listing~\ref{lst:fail_classA} is a representative Class A failure from Gemini on \texttt{HumanEval/7} (\texttt{filter\_by\_substring}). The original returns the list of strings in \texttt{strings} that contain \texttt{substring}. Gemini's optimised version replaced the predicate-based filter by a list comprehension whose membership test inverted the operand order:
 
+\par\medskip\noindent
+\begin{minipage}{\columnwidth}
 \begin{lstlisting}[caption={Class A failure: Gemini on HumanEval/7.}, label={lst:fail_classA}]
 def filter_by_substring(strings, substring):
     # WRONG: tests `s in substring` instead of
     # `substring in s` -- semantically inverted.
     return [s for s in strings if s in substring]
 \end{lstlisting}
+\end{minipage}\par\medskip
 
 The function in Listing~\ref{lst:fail_classA} compiles, runs, and returns a list; the assertion only fails on inputs where \texttt{substring} is itself a substring of one of the strings rather than the converse. The defect is structural: no syntax error, no runtime exception, no timeout --- only a wrong answer detected by the official assertion. This is exactly the failure mode that motivates the test-based validation harness: without an executable oracle, the transformation would silently ship.
 
 \subsubsection*{Class B example: empty or unparseable response}
 Listing~\ref{lst:fail_classB} reproduces a representative Class B failure from Llama 3.3 70B on \texttt{HumanEval/2} (\texttt{truncate\_number}). The model's response, instead of a fenced code block, was a short natural-language description of why the function is already efficient. The regex that scans for ` ```python ... ``` ` returned no match, the parser fell back to the raw text, and the validation harness rejected the candidate because \texttt{truncate\_number} was not defined in the resulting namespace.
 
+\par\medskip\noindent
+\begin{minipage}{\columnwidth}
 \begin{lstlisting}[caption={Class B failure: Llama 70B on HumanEval/2.}, label={lst:fail_classB}]
 # (Llama response, abbreviated)
 # The function `truncate_number(number)` is already
 # efficient. It uses `int()` to compute the integer
 # part and subtracts ... [no code block followed]
 \end{lstlisting}
+\end{minipage}\par\medskip
 
 In the case of Listing~\ref{lst:fail_classB}, the validation harness reports ``optimiser did not return code'' and the candidate is discarded.
 
@@ -693,13 +720,18 @@ Figure~\ref{fig:scatter_gemini} renders the per-problem trade-off for Gemini in 
 
 To make the heterogeneity tangible at the level of a single problem, we examine \texttt{HumanEval/55} (\texttt{fib}), the canonical recursive Fibonacci that yields the most dramatic gains across every back-end. Listing~\ref{lst:case_orig} reproduces the canonical solution that all four back-ends receive as input. Listings~\ref{lst:case_gem}--\ref{lst:case_gpt} show the optimisations produced by each LLM, together with the measured speedup.
 
+\par\medskip\noindent
+\begin{minipage}{\columnwidth}
 \begin{lstlisting}[caption={Original \texttt{fib} (HumanEval/55), fed to all back-ends.}, label={lst:case_orig}]
 def fib(n: int):
     if n == 0: return 0
     if n == 1: return 1
     return fib(n-1) + fib(n-2)
 \end{lstlisting}
+\end{minipage}\par\medskip
 
+\par\medskip\noindent
+\begin{minipage}{\columnwidth}
 \begin{lstlisting}[caption={Gemini 2.5 Flash Lite on \texttt{fib} (speedup $\mathbf{157.22\times}$).}, label={lst:case_gem}]
 from functools import lru_cache
 
@@ -709,7 +741,10 @@ def fib(n: int):
     if n == 1: return 1
     return fib(n-1) + fib(n-2)
 \end{lstlisting}
+\end{minipage}\par\medskip
 
+\par\medskip\noindent
+\begin{minipage}{\columnwidth}
 \begin{lstlisting}[caption={Llama 3.3 70B on \texttt{fib} (speedup $\mathbf{122.72\times}$).}, label={lst:case_lla}]
 from functools import lru_cache
 
@@ -719,8 +754,11 @@ def fib(n: int):
     if n == 1: return 1
     return fib(n - 1) + fib(n - 2)
 \end{lstlisting}
+\end{minipage}\par\medskip
 
-\begin{lstlisting}[caption={GPT-4o-mini -- iterative $O(n)$ formulation, no \texttt{lru\_cache} (speedup $\mathbf{19.17\times}$).}, label={lst:case_gpt}]
+\par\medskip\noindent
+\begin{minipage}{\columnwidth}
+\begin{lstlisting}[caption={GPT-4o-mini on \texttt{fib}: iterative (speedup $\mathbf{19.17\times}$).}, label={lst:case_gpt}]
 def fib(n: int):
     if n == 0: return 0
     a, b = 0, 1
@@ -728,6 +766,7 @@ def fib(n: int):
         a, b = b, a + b
     return b
 \end{lstlisting}
+\end{minipage}\par\medskip
 
 The iterative two-variable recurrence in Listing~\ref{lst:case_gpt} is asymptotically $O(n)$ but pays a constant-factor penalty relative to memoisation under our repeated-call workload.
 
