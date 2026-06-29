@@ -39,11 +39,26 @@
 \title{Using Language Models for Python Code Optimization: Limits and Possibilities in Dynamic Languages}
 
 \author{
-\IEEEauthorblockN{Claudio Meireles and Lucas Fiche}
+\IEEEauthorblockN{Claudio Meireles}
 \IEEEauthorblockA{\textit{Computer Science Program} \\
-\textit{Instituto Brasileiro de Ensino, Desenvolvimento e Pesquisa}\\
+\textit{Instituto Brasileiro de Ensino,} \\
+\textit{Desenvolvimento e Pesquisa (IDP)} \\
 Brasília, Brazil \\
-}
+\textit{claudio.meireles@idp.edu.br}}
+\and
+\IEEEauthorblockN{Lucas Fiche}
+\IEEEauthorblockA{\textit{Computer Science Program} \\
+\textit{Instituto Brasileiro de Ensino,} \\
+\textit{Desenvolvimento e Pesquisa (IDP)} \\
+Brasília, Brazil \\
+\textit{lucas.fiche@idp.edu.br}}
+\and
+\IEEEauthorblockN{[Prof.\ Advisor Name]}
+\IEEEauthorblockA{\textit{Advisor, Computer Science Program} \\
+\textit{Instituto Brasileiro de Ensino,} \\
+\textit{Desenvolvimento e Pesquisa (IDP)} \\
+Brasília, Brazil \\
+\textit{advisor@idp.edu.br}}
 }
 
 \maketitle
@@ -120,7 +135,30 @@ The use of machine learning for automatic code transformation predates the moder
 
 The recent empirical software-engineering literature converges on three observations directly relevant to our methodology. First, pre-trained code models differ substantially among themselves: Niu et al.~\cite{DBLP:conf/icse/NiuLNCGL23}, at ICSE 2023, conducted a head-to-head evaluation of multiple pre-trained source-code models and observed effect sizes between models that exceeded the differences between fine-tuning strategies -- foreshadowing the model-choice-matters finding we report in Section~\ref{sec:llmvsbase}. Second, LLM outputs show systematic quality issues that demand explicit mitigation: Liu et al.~\cite{DBLP:journals/tosem/LiuLWTLLL24}, in ACM TOSEM 2024, characterized recurring code-quality problems in ChatGPT-generated Python code and proposed automated refinement strategies, while Mastropaolo et al.~\cite{DBLP:conf/icse/MastropaoloPGCSO23}, at ICSE 2023, showed that GitHub Copilot's outputs vary considerably under semantically equivalent prompt perturbations. Third, LLMs are nonetheless effective at code-transformation tasks beyond pure generation: Jiang et al.~\cite{DBLP:conf/icse/JiangLLT23}, at ICSE 2023, demonstrated that code language models substantially improve automated program repair, and Pan et al.~\cite{DBLP:conf/icse/PanIKSWMSPSJ24}, at ICSE 2024, dissected the bugs LLMs introduce while translating code between languages -- a closely related task to ours that confirms the necessity of test-based validation. Finally, Nam et al.~\cite{DBLP:conf/icse/NamMHVM24}, at ICSE 2024, found that LLMs measurably help developers understand unfamiliar code -- a usability dimension complementary to the runtime-performance focus of this work.
 
-Taken together, these works indicate that LLMs are competitive -- and often complementary -- to classical compilers, especially when optimizations occur at a higher semantic or algorithmic level, and that architectures that couple static analysis (AST, dependency graphs) with a generation-with-verification loop tend to produce more reliable results than direct prompts over source code.
+Taken together, these works indicate that LLMs are competitive -- and often complementary -- to classical compilers, especially when optimizations occur at a higher semantic or algorithmic level, and that architectures that couple static analysis (AST, dependency graphs) with a generation-with-verification loop tend to produce more reliable results than direct prompts over source code. Table~\ref{tab:related} positions the present work against the most directly comparable prior efforts along four axes: the target representation, whether multiple models are compared, whether an executable validation oracle is used, and the primary programming language studied.
+
+\begin{table*}[htbp]
+\caption{Positioning of this work relative to representative prior approaches on LLM-based code optimization and transformation.}
+\label{tab:related}
+\centering
+\footnotesize
+\begin{tabular}{lllll}
+\hline
+\textbf{Work} & \textbf{Target / representation} & \textbf{Multi-model} & \textbf{Executable validation} & \textbf{Language} \\
+\hline
+Cummins et al.~\cite{DBLP:journals/corr/abs-2309-07062} & LLVM-IR optimization passes & no & yes (IR semantics) & C/C++ (IR) \\
+Meta LLM Compiler~\cite{DBLP:journals/corr/abs-2407-02524} & IR / assembly, pass ordering & no & yes & C/C++ (IR) \\
+Shypula et al.\ (PIE)~\cite{DBLP:journals/corr/abs-2302-07867} & Source-level perf.\ edits & no (fine-tunes one) & yes (unit tests) & C++ \\
+Madaan et al.\ (Self-Refine)~\cite{DBLP:journals/corr/abs-2303-17651} & General iterative refinement & no & partial (self-critique) & multiple \\
+Chen et al.\ (Self-Debug)~\cite{DBLP:journals/corr/abs-2304-05128} & Code repair via feedback & no & yes (execution) & Python/SQL \\
+DocAgent~\cite{DBLP:journals/corr/abs-2504-08725} & Docstrings (AST + graph) & no & yes (entity check) & Python \\
+\hline
+\textbf{This work} & \textbf{Source-level, AST-guided} & \textbf{yes (3 LLMs + baseline)} & \textbf{yes (HumanEval tests)} & \textbf{Python} \\
+\hline
+\end{tabular}
+\end{table*}
+
+The distinguishing feature of the present study is the combination of a \emph{paired, multi-model} comparison (three LLMs from distinct families plus a deterministic baseline) with a mandatory executable validation oracle, applied specifically to the under-studied setting of a dynamically typed language. Most prior work either evaluates a single model, targets a statically typed or intermediate representation, or omits a paired symbolic baseline that quantifies the marginal value of the LLM.
 
 \section{Methodology and Proposed Architecture}
 \label{sec:metodologia}
@@ -154,6 +192,21 @@ The proposed architecture is organized in five modules, described below:
 
 The complete pipeline can be interpreted as a feedback-assisted loop: failures detected in the validation module can be re-introduced into the prompt in a strategy analogous to self-refine.
 
+\subsection{The Deterministic Rule Set}
+\label{sec:rule_set}
+
+The baseline optimiser is intentionally simple, so that it serves as an honest lower bound: a transformation either matches an exact syntactic pattern, or it is not applied. Each rule is implemented as an \texttt{ast.NodeTransformer} that rewrites a sub-tree only when its precondition holds; otherwise the original node is returned unchanged, guaranteeing semantic preservation by construction for the patterns it recognises. Four rules are implemented.
+
+\paragraph{R1 -- Memoization} If the entry-point function contains a recursive call to itself (detected by an \texttt{ast.NodeVisitor} that flags any \texttt{Call} whose callee name equals the entry point), the rule prepends the \texttt{@functools.lru\_cache(maxsize=None)} decorator and inserts the corresponding import if absent. The precondition is $f.\mathit{nrec} > 0$. This is the highest-impact rule, turning exponential recursion into linear amortised time.
+
+\paragraph{R2 -- Builtin summation} The rule matches the exact pattern of an accumulator initialised to zero followed by a \texttt{for} loop whose body is a single \texttt{acc += expr} (or \texttt{acc = acc + expr}) statement, and rewrites it as \texttt{acc = sum(expr for var in iter)}. The precondition is the presence of the two-statement init-loop pattern.
+
+\paragraph{R4 -- Set membership} Inside a loop, a comparison of the form \texttt{x in [literal, \ldots]} against a list literal of constants is rewritten to \texttt{x in frozenset((\ldots))}, converting an $O(n)$ membership test into $O(1)$. The rule only fires inside a loop (tracked by a nesting-depth counter) because outside a loop the one-off \texttt{frozenset} construction would not amortise.
+
+\paragraph{R5 -- String join} The pattern of an empty-string accumulator followed by a loop that appends via \texttt{acc += expr} is rewritten to accumulate into a list and emit \texttt{acc = ''.join(buffer)}, avoiding the quadratic cost of repeated string concatenation.
+
+As reported in Section~\ref{sec:resultados}, R2, R4, and R5 frequently \emph{regress} on HumanEval because the small input sizes do not amortise the construction of the intermediate generator, \texttt{frozenset}, or list. This is itself an informative negative result: it demonstrates concretely that a transformation can be locally idiomatic and globally counter-productive, which is precisely the contextual judgement an LLM is positioned to make and a syntactic rule is not.
+
 \subsection{Static Feature Extraction}
 The Static Analysis Module is realised as a single pass over the AST that materialises eight numerical features used both as conditioning signals for the LLM prompt and as filtering criteria for the deterministic rule optimiser. Algorithm~\ref{alg:features} sketches the procedure.
 
@@ -181,8 +234,8 @@ The Static Analysis Module is realised as a single pass over the AST that materi
     \IF{$n.\mathit{func}$ is \texttt{Name} \AND $n.\mathit{func}.\mathit{id} = e$}
       \STATE $f.\mathit{nrec} \leftarrow f.\mathit{nrec}+1$ \quad // recursive call
     \ENDIF
-  \ELSIF{$n$ is \texttt{ListComp}/\texttt{DictComp}/\texttt{SetComp}/\texttt{GeneratorExp}}
-    \STATE $f.\mathit{ncomp} \leftarrow f.\mathit{ncomp}+1$
+  \ELSIF{$n$ is any comprehension or generator}
+    \STATE $f.\mathit{ncomp} \leftarrow f.\mathit{ncomp}+1$ \quad // list/dict/set/gen
   \ELSIF{$n$ is \texttt{Import} or \texttt{ImportFrom}}
     \STATE add module name(s) to $f.\mathit{imp}$
   \ENDIF
@@ -514,6 +567,30 @@ First, the headline ``$23.2\%$ hallucination rate'' for Llama is misleading: onl
 
 Second, the semantic hallucination floor across all three models is remarkably stable at $10$--$11$ failures, suggesting that the genuine difficulty of producing a semantically equivalent transformation is determined more by the \emph{task} (a fraction of HumanEval problems involve subtle invariants that any LLM at this scale struggles to preserve) than by the \emph{model}. Identifying these task-intrinsic failures and characterising what makes them hard is a natural next step.
 
+\subsubsection*{Class A example: silent semantic divergence}
+Listing~\ref{lst:fail_classA} is a representative Class A failure from Gemini on \texttt{HumanEval/7} (\texttt{filter\_by\_substring}). The original returns the list of strings in \texttt{strings} that contain \texttt{substring}. Gemini's optimised version replaced the predicate-based filter by a list comprehension whose membership test inverted the operand order:
+
+\begin{lstlisting}[caption={Class A failure (Gemini, HumanEval/7): membership test with operands swapped. The function compiles, runs, and returns a list; the assertion only fails on inputs where \texttt{substring} is itself a substring of one of the strings rather than the converse.}, label={lst:fail_classA}]
+def filter_by_substring(strings, substring):
+    # WRONG: tests `s in substring` instead of
+    # `substring in s` -- semantically inverted.
+    return [s for s in strings if s in substring]
+\end{lstlisting}
+
+The defect is structural: no syntax error, no runtime exception, no timeout --- only a wrong answer detected by the official assertion. This is exactly the failure mode that motivates the test-based validation harness: without an executable oracle, the transformation would silently ship.
+
+\subsubsection*{Class B example: empty or unparseable response}
+Listing~\ref{lst:fail_classB} reproduces a representative Class B failure from Llama 3.3 70B on \texttt{HumanEval/2} (\texttt{truncate\_number}). The model's response, instead of a fenced code block, was a short natural-language description of why the function is already efficient. The regex that scans for ` ```python ... ``` ` returned no match, the parser fell back to the raw text, and the validation harness rejected the candidate because \texttt{truncate\_number} was not defined in the resulting namespace.
+
+\begin{lstlisting}[caption={Class B failure (Llama 70B, HumanEval/2): the LLM returned prose instead of a fenced code block. The validation harness reports ``optimiser did not return code'' and the candidate is discarded.}, label={lst:fail_classB}]
+# (Llama response, abbreviated)
+# The function `truncate_number(number)` is already
+# efficient. It uses `int()` to compute the integer
+# part and subtracts ... [no code block followed]
+\end{lstlisting}
+
+Class B failures are structurally less informative than Class A failures: they reveal nothing about the model's semantic capability, only about its compliance with the formatting contract. The asymmetry between Gemini (0 Class B) and Llama 70B / GPT-4o-mini ($\geq 16$ Class B each) suggests that instruction-following discipline, not raw code-generation capability, dominates the observed gap. This is consistent with the observation that all three models successfully apply the same algorithmic transformations (Section~\ref{sec:win_distribution}) when they manage to emit any code at all.
+
 \subsection{Win Distribution by Transformation Class}
 \label{sec:win_distribution}
 
@@ -586,7 +663,89 @@ Notably, only $10$ of the baseline's $15$ wins are also caught by at least one L
 \label{fig:scatter_gemini}
 \end{figure}
 
-Figure~\ref{fig:scatter_gemini} renders the per-problem trade-off for Gemini in scatter form (the other three backends produce qualitatively similar plots and are omitted for space). The visual pattern -- a dense diagonal cluster near the identity line, a clear lower-left lobe of high-impact wins, and a thinner upper-left band of regressions -- matches the distributional analysis of Figures~\ref{fig:hist_baseline} and~\ref{fig:hist_comparison} and provides an intuitive per-problem view of the same data.
+Figure~\ref{fig:scatter_gemini} renders the per-problem trade-off for Gemini in scatter form. The visual pattern -- a dense diagonal cluster near the identity line, a clear lower-left lobe of high-impact wins, and a thinner upper-left band of regressions -- matches the distributional analysis of Figures~\ref{fig:hist_baseline} and~\ref{fig:hist_comparison} and provides an intuitive per-problem view of the same data. Figures~\ref{fig:scatter_llama} and~\ref{fig:scatter_gpt4omini} provide the corresponding plots for the Llama 70B and GPT-4o-mini back-ends, where the lower-left lobe is visibly less populated, matching their lower improvement coverage in Table~\ref{tab:llm_vs_base}.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.95\columnwidth]{experiment/results/fig_llama_scatter.pdf}
+\caption{Per-problem optimised vs.\ original execution time under Llama 3.3 70B served by Groq (log--log scale). The lower-left lobe of high-impact wins is smaller than Gemini's, and a denser band sits slightly above the identity line, matching the model's negative aggregate trade-off (improvements/regressions ratio $0.90$).}
+\label{fig:scatter_llama}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.95\columnwidth]{experiment/results/fig_gpt4omini_scatter.pdf}
+\caption{Per-problem optimised vs.\ original execution time under GPT-4o-mini served by GitHub Models (log--log scale). The distribution is qualitatively intermediate between Gemini and Llama, with a visible lower-left lobe but a heavier upper-left band of small regressions.}
+\label{fig:scatter_gpt4omini}
+\end{figure}
+
+\subsection{Comparative Case Study: \texttt{HumanEval/55} (\texttt{fib})}
+\label{sec:case_study}
+
+To make the heterogeneity tangible at the level of a single problem, we examine \texttt{HumanEval/55} (\texttt{fib}), the canonical recursive Fibonacci that yields the most dramatic gains across every back-end. Listing~\ref{lst:case_orig} reproduces the canonical solution that all four back-ends receive as input. Listings~\ref{lst:case_gem}--\ref{lst:case_gpt} show the optimisations produced by each LLM, together with the measured speedup.
+
+\begin{lstlisting}[caption={Original \texttt{fib} (HumanEval/55) -- the same canonical solution fed to all four back-ends.}, label={lst:case_orig}]
+def fib(n: int):
+    if n == 0: return 0
+    if n == 1: return 1
+    return fib(n-1) + fib(n-2)
+\end{lstlisting}
+
+\begin{lstlisting}[caption={Gemini 2.5 Flash Lite -- adds \texttt{@lru\_cache} to the recursive function (speedup $\mathbf{157.22\times}$).}, label={lst:case_gem}]
+from functools import lru_cache
+
+@lru_cache(maxsize=None)
+def fib(n: int):
+    if n == 0: return 0
+    if n == 1: return 1
+    return fib(n-1) + fib(n-2)
+\end{lstlisting}
+
+\begin{lstlisting}[caption={Llama 3.3 70B -- same memoisation strategy, slightly noisier per-call overhead (speedup $\mathbf{122.72\times}$).}, label={lst:case_lla}]
+from functools import lru_cache
+
+@lru_cache(maxsize=None)
+def fib(n: int):
+    if n == 0: return 0
+    if n == 1: return 1
+    return fib(n - 1) + fib(n - 2)
+\end{lstlisting}
+
+\begin{lstlisting}[caption={GPT-4o-mini -- iterative formulation (no \texttt{lru\_cache}). The two-variable recurrence is asymptotically $O(n)$ but pays a constant-factor penalty (speedup $\mathbf{19.17\times}$).}, label={lst:case_gpt}]
+def fib(n: int):
+    if n == 0: return 0
+    a, b = 0, 1
+    for _ in range(n - 1):
+        a, b = b, a + b
+    return b
+\end{lstlisting}
+
+Three observations follow from this comparative case. First, the algorithmic insight is shared: all three LLMs recognise that an exponential-time recurrence on small integers can be reduced to linear time. The deterministic AST baseline reaches the same conclusion through its R1 rule (Listing~\ref{lst:fib_r1}). Second, the chosen \emph{implementation strategy} differs: Gemini and Llama converge on the decorator-based memoisation that the baseline also produces, while GPT-4o-mini rewrites the function iteratively. The two strategies are asymptotically equivalent but have very different constant factors --- the iterative version avoids the per-call hashing of \texttt{lru\_cache} but loses the memoisation across repeated calls of the same input. Third, the magnitude gap between Gemini ($157.22\times$) and GPT-4o-mini ($19.17\times$) on the \emph{same problem with the same strategy class} (T2) is not a difference in algorithmic capability, but in how well each model exploits the dominant cost in this particular benchmark (the test repeats the same calls under our 200-fold workload multiplier, which rewards memoisation more than asymptotic improvement). This single-problem view illustrates why aggregated comparisons of LLMs for code transformation must report both the median (which captures typical impact) and the maximum (which captures peak capability) --- the two metrics can move independently across the same model pair.
+
+\subsection{Inference Cost and Latency}
+\label{sec:latency}
+
+A practical pipeline must weigh the optimization quality of a back-end against its inference cost. Because every LLM call was timed (the \texttt{llm\_latency\_s} field of each record), the result files permit a direct cost analysis at no additional expense. Table~\ref{tab:latency} summarises the per-call latency distribution of the three LLM back-ends over the 164 problems.
+
+\begin{table}[htbp]
+\caption{Per-call inference latency over the 164 HumanEval problems (seconds). All three back-ends used free-tier endpoints; absolute latencies are therefore subject to shared-tenancy variance and should be read as orders of magnitude, not as service-level guarantees.}
+\label{tab:latency}
+\centering
+\footnotesize
+\begin{tabular}{lrrrr}
+\hline
+\textbf{Back-end} & \textbf{Median} & \textbf{Mean} & \textbf{Min} & \textbf{Max} \\
+\hline
+Gemini 2.5 Flash Lite & 4.15 & 7.12 & 0.62 & 50.13 \\
+Llama 3.3 70B (Groq) & 3.29 & 2.56 & 0.19 & 5.91 \\
+GPT-4o-mini (GitHub) & 7.38 & 8.47 & 2.50 & 64.66 \\
+\hline
+\end{tabular}
+\end{table}
+
+Two points stand out. First, Groq's specialised inference hardware gives Llama~70B the lowest and most stable latency (mean $2.56$\,s, max under $6$\,s) despite being the largest model by parameter count -- a reminder that serving infrastructure, not model size, dominates wall-clock latency. Second, the heavy-tailed maxima of Gemini ($50$\,s) and GPT-4o-mini ($65$\,s) are artefacts of free-tier rate-limit backoff rather than raw compute: the exponential-retry logic (Section~\ref{sec:reproducibility}) deliberately trades latency for completion under transient $429$ responses.
+
+Combining latency with the quality results of Table~\ref{tab:llm_vs_base} sharpens the model-selection guidance: Gemini offers the best quality at moderate latency; Llama offers the lowest latency but the weakest quality; and GPT-4o-mini is dominated on both axes in this experiment. For a latency-sensitive deployment that can tolerate a lower improvement coverage, Llama via Groq is defensible; for a quality-sensitive batch pipeline where per-call latency is amortised, Gemini is the clear choice. No single back-end is optimal on every axis, which reinforces the central thesis that model selection is an empirical, workload-dependent engineering decision.
 
 \section{Discussion: Limits and Possibilities}
 \label{sec:discussao}
@@ -612,6 +771,19 @@ On the other hand, both the results and the literature point to concrete possibi
   \item \textbf{Runtime feedback.} Profiling information (\texttt{cProfile}), bytecode inspection (\texttt{dis}), and data from CPython 3.11+'s adaptive interpreter can enrich the LLM's prompt, in the spirit of self-debugging approaches that feed execution results back to the model \cite{DBLP:journals/corr/abs-2304-05128}.
   \item \textbf{Reproducibility at zero cost.} The existence of foundation models with free tiers (Gemini 2.5 Flash Lite, Llama 3.3 via Groq) makes it feasible to run the proposed pipeline in academic settings at no cost, as demonstrated in this work.
 \end{itemize}
+
+\subsection{Practical Guidance for Pipeline Designers}
+\label{sec:practical_guidance}
+
+Synthesising the empirical findings, the experimental design, and the qualitative analyses above, we distil four decision guidelines for practitioners considering an LLM-augmented optimisation pipeline for Python.
+
+\paragraph{When the symbolic baseline is enough} If the target codebase is dominated by a small number of well-known idioms (e.g., recursive numerical functions that benefit from \texttt{lru\_cache}, hand-written summation loops, set-membership tests on small literals), a deterministic AST-rule layer is preferable to an LLM. It is free, deterministic, formally auditable, and preserves semantics by construction --- properties an LLM cannot match. The 615$\times$ \texttt{fibfib} speedup of Section~\ref{sec:resultados} was produced this way.
+
+\paragraph{When to introduce an LLM} The deterministic baseline saturates rapidly: in our experiment it triggered on 4.9\% of HumanEval and produced no statistically significant median gain. If the desired coverage exceeds this regime, an LLM is justified. The cost is a hallucination floor (between 6\% and 23\% in our experiment) and a non-trivial computational and quota budget; the benefit is a roughly $6\times$ expansion of improvement coverage and the only configuration that produced a significant median speedup in our tests.
+
+\paragraph{How to choose the LLM} Treat model selection as an engineering decision with an empirical answer. Run the candidate models against a representative paired benchmark (164 HumanEval problems is sufficient to detect effect-size differences of practical interest) and compare \emph{three} metrics simultaneously: hallucination rate, median speedup with bootstrap CI, and improvement coverage. The naive ranking by parameter count or release date is misleading; in our setting a 70B open-weight model was outperformed by a compact proprietary one on every aggregate metric (Table~\ref{tab:llm_vs_base}).
+
+\paragraph{What to keep mandatory} Regardless of the chosen back-end, the test-based validation harness (Algorithm~\ref{alg:validate}) is non-negotiable. It is the mechanism that turns Class A hallucinations (Section~\ref{sec:error_analysis}) into discarded outputs rather than silent regressions. A robust output parser that minimises Class B failures is a complementary safety net that costs almost nothing to implement and recovers a non-trivial fraction of weaker-model losses (16.5\% of Llama 70B's outputs in our experiment).
 
 \section{Threats to Validity}
 \label{sec:ameacas}
@@ -652,6 +824,38 @@ These results refute the simplistic thesis that ``LLMs beat the baseline'' and e
 As future work, we plan to: (i) integrate Retrieval-Augmented Generation (RAG) \cite{DBLP:journals/corr/abs-2005-11401} with the PIE dataset \cite{DBLP:journals/corr/abs-2302-07867} as a source of few-shot examples, with the expectation of reducing the high hallucination rate observed in the weaker LLMs (up to $23.2\%$ in Llama 70B); (ii) incorporate CPython 3.11+ bytecode feedback and profiling reports as additional prompt context, in the spirit of self-debugging approaches \cite{DBLP:journals/corr/abs-2304-05128}; (iii) evaluate generalization to other, more complex datasets (Project CodeNet Python800, MBPP \cite{DBLP:journals/corr/abs-2108-07732}, real GitHub repositories) and to code-specialized LLMs such as DeepSeek-Coder \cite{DBLP:journals/corr/abs-2401-14196}, StarCoder~2 \cite{DBLP:journals/corr/abs-2402-19173}, and Code Llama \cite{DBLP:journals/corr/abs-2308-12950} under the same paired-comparison protocol; (iv) implement a self-refine loop \cite{DBLP:journals/corr/abs-2303-17651} in which validation failures are returned to the LLM as context for a new attempt, aiming to recover part of the hallucinations; (v) investigate \textbf{why} heterogeneity across LLMs is so large -- particularly, whether the gap between Gemini ($6.1\%$ hallucination) and Llama 70B ($23.2\%$) stems from model size, training data, alignment techniques, or prompt tuning; and (vi) explore a multi-agent architecture inspired by DocAgent \cite{DBLP:journals/corr/abs-2504-08725}, in which agents specialized in analysis, transformation, and verification cooperate through an orchestrator, with dependency-aware traversal of the program's call graph.
 
 \paragraph{Expected contributions} In summary, this work contributes: (1) a critical, reproducible, and \emph{multi-model} evaluation of the use of generative AI for code optimization in a dynamic language, comparing three LLMs from distinct providers and families; (2) the quantitative identification of the real limits of symbolic pattern-based approaches over AST (only $4.9\%$ coverage on HumanEval, with no statistically significant median gain); (3) empirical evidence of \emph{strong heterogeneity across LLMs} for the code-optimization task (hallucination varying $4\times$, coverage varying $2\times$, only one of the three models reaching statistical significance in median speedup); and (4) guidelines for the safe use of LLMs in optimization pipelines -- notably, the obligation of test-based semantic validation, the need for empirical model selection on the target domain (one cannot simply assume a ``modern'' LLM works), and the adoption of a verification mesh inspired by systems such as DocAgent \cite{DBLP:journals/corr/abs-2504-08725}.
+
+\section{Reproducibility and Artefacts}
+\label{sec:reproducibility}
+
+To support independent verification and reuse, the entire pipeline, dataset, raw results, and figure-generation scripts are publicly available. This section documents the experimental environment and the steps needed to reproduce every number reported in the paper.
+
+\subsection{Experimental Environment}
+All experiments were executed on CPython~3.11 over Linux. The deterministic baseline is fully reproducible and requires no external service. The three LLM back-ends were accessed through free-tier APIs: Google AI Studio (Gemini), Groq (Llama~3.3~70B), and GitHub Models (GPT-4o-mini). All inference calls used \textit{temperature} $= 0.2$ and \textit{max\_output\_tokens} $= 2048$, with a fixed random seed (\texttt{42}) for the problem ordering. Because LLM inference is non-deterministic even at low temperature, exact per-problem speedups may vary slightly across runs; the aggregate statistics (medians, confidence intervals, hallucination rates) are stable across repetitions.
+
+\subsection{Software Components}
+The pipeline comprises five interchangeable Python modules totalling approximately 1{,}366 lines of code:
+\begin{itemize}
+  \item \texttt{pipeline.py} -- the orchestrator exposing a command-line interface with the \texttt{-{}-backend} switch (\texttt{rule\_based}, \texttt{gemini}, \texttt{groq}, \texttt{github\_models}).
+  \item \texttt{optimizer.py} -- the multi-provider LLM client. All providers expose an OpenAI-compatible interface or a simple REST endpoint, enabling transparent back-end interchange. Exponential retry (up to 7 attempts, backoff up to 60\,s) absorbs the transient 429/5xx errors common on free tiers.
+  \item \texttt{rule\_optimizer.py} -- the deterministic AST-rule optimiser implementing R1 (\texttt{lru\_cache}), R2 (\texttt{sum()}), R4 (\texttt{frozenset}), and R5 (\texttt{join}).
+  \item \texttt{bench\_utils.py} -- the validation harness (Algorithm~\ref{alg:validate}) and the benchmark routine.
+  \item \texttt{generate\_figures.py} / \texttt{generate\_comparison.py} -- the \texttt{matplotlib} scripts that produce every figure in this paper directly from the result JSON files.
+\end{itemize}
+
+\subsection{Reproduction Recipe}
+The baseline is reproduced with a single command requiring no API key:
+\begin{center}
+\texttt{\scriptsize python3 pipeline.py -{}-backend rule\_based -{}-n 164}
+\end{center}
+Each LLM back-end is reproduced by exporting the corresponding free-tier key and selecting the back-end, e.g.:
+\begin{center}
+\texttt{\scriptsize python3 pipeline.py -{}-backend gemini -{}-n 164}
+\end{center}
+Each run emits a JSON file with one record per problem, containing the extracted AST features, the original and optimised execution times, the validity flag, the typed error string, and the measured speedup. The aggregate tables (Tables~\ref{tab:agregado}--\ref{tab:agreement}) and all figures are regenerated deterministically from these JSON files, so a reviewer can recompute every reported statistic without re-invoking any LLM. The four result files produced for this paper (one per back-end, $164$ records each) are included in the repository, ensuring that the analysis is verifiable even without API access.
+
+\subsection{Dataset Provenance}
+The HumanEval dataset \cite{DBLP:journals/corr/abs-2107-03374} is the unmodified public release distributed by OpenAI under the MIT license, redistributed unchanged as \texttt{HumanEval.jsonl.gz}. No problem was filtered, edited, or excluded: all 164 problems were processed by every back-end, and the handling of the 8--9 problems whose execution time fell below the clock resolution is documented explicitly in the footnotes of Tables~\ref{tab:agregado} and~\ref{tab:llm_vs_base}.
 
 \bibliographystyle{IEEEtran}
 \bibliography{references}
