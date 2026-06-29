@@ -694,26 +694,12 @@ Notably, only $10$ of the baseline's $15$ wins are also caught by at least one L
 
 \begin{figure}[htbp]
 \centering
-\includegraphics[width=0.95\columnwidth]{experiment/results/fig_gemini_scatter.pdf}
-\caption{Per-problem optimised vs.\ original execution time under Gemini 2.5 Flash Lite (log--log scale). Points below the red identity line are improvements; points above are regressions. The two extreme outliers in the lower-left correspond to the memoisation wins (\texttt{fib}, \texttt{fibfib}); the points clustered near identity reflect the many near-neutral transformations on small inputs.}
-\label{fig:scatter_gemini}
+\includegraphics[width=0.86\columnwidth]{experiment/results/fig_scatter_panel.pdf}
+\caption{Per-problem optimised vs.\ original execution time (log--log scale) for the three LLM back-ends: (a) Gemini 2.5 Flash Lite, (b) Llama 3.3 70B, (c) GPT-4o-mini. Points below the red identity line ($y=x$) are improvements; points above are regressions. The lower-left lobe of high-impact memoisation wins is densest for Gemini and progressively sparser for Llama and GPT-4o-mini, matching their decreasing improvement coverage in Table~\ref{tab:llm_vs_base}.}
+\label{fig:scatter_panel}
 \end{figure}
 
-Figure~\ref{fig:scatter_gemini} renders the per-problem trade-off for Gemini in scatter form. The visual pattern -- a dense diagonal cluster near the identity line, a clear lower-left lobe of high-impact wins, and a thinner upper-left band of regressions -- matches the distributional analysis of Figures~\ref{fig:hist_baseline} and~\ref{fig:hist_comparison} and provides an intuitive per-problem view of the same data. Figures~\ref{fig:scatter_llama} and~\ref{fig:scatter_gpt4omini} provide the corresponding plots for the Llama 70B and GPT-4o-mini back-ends, where the lower-left lobe is visibly less populated, matching their lower improvement coverage in Table~\ref{tab:llm_vs_base}.
-
-\begin{figure}[htbp]
-\centering
-\includegraphics[width=0.95\columnwidth]{experiment/results/fig_llama_scatter.pdf}
-\caption{Per-problem optimised vs.\ original execution time under Llama 3.3 70B served by Groq (log--log scale). The lower-left lobe of high-impact wins is smaller than Gemini's, and a denser band sits slightly above the identity line, matching the model's negative aggregate trade-off (improvements/regressions ratio $0.90$).}
-\label{fig:scatter_llama}
-\end{figure}
-
-\begin{figure}[htbp]
-\centering
-\includegraphics[width=0.95\columnwidth]{experiment/results/fig_gpt4omini_scatter.pdf}
-\caption{Per-problem optimised vs.\ original execution time under GPT-4o-mini served by GitHub Models (log--log scale). The distribution is qualitatively intermediate between Gemini and Llama, with a visible lower-left lobe but a heavier upper-left band of small regressions.}
-\label{fig:scatter_gpt4omini}
-\end{figure}
+Figure~\ref{fig:scatter_panel} renders the per-problem trade-off of the three back-ends in scatter form. The shared visual pattern -- a dense diagonal cluster near the identity line, a lower-left lobe of high-impact wins, and a thinner upper-left band of regressions -- matches the distributional analysis of Figures~\ref{fig:hist_baseline} and~\ref{fig:hist_comparison} and provides an intuitive per-problem view of the same data. The lower-left lobe is densest for Gemini (panel a), visibly sparser for GPT-4o-mini (panel c), and sparsest for Llama (panel b), whose denser band slightly above the identity line reflects its negative aggregate trade-off (improvements/regressions ratio $0.90$).
 
 \subsection{Comparative Case Study: \texttt{HumanEval/55} (\texttt{fib})}
 \label{sec:case_study}
